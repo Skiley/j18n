@@ -17,11 +17,6 @@ pub enum Command {
 	#[command(about = "Create a skeleton JSON configuration file at the given path.")]
 	Init(InitArgs),
 
-	#[command(
-		about = "Migrate a flat hash-cache file to the per-target structure (temporary, will be removed)."
-	)]
-	MigrateHashCache(MigrateHashCacheArgs),
-
 	#[command(about = "Translate only missing entries or those changed since the last run.")]
 	Sync(CommandArgs),
 
@@ -33,15 +28,6 @@ pub enum Command {
 pub struct InitArgs {
 	#[arg(help = "Path where the skeleton config file will be written.")]
 	pub path: PathBuf,
-}
-
-#[derive(Args, Debug)]
-pub struct MigrateHashCacheArgs {
-	#[arg(help = "Path to the JSON config that lists the targets the hash cache covers.")]
-	pub config: PathBuf,
-
-	#[arg(help = "Path to the existing flat hash-cache file (will be rewritten in place).")]
-	pub hash_cache: PathBuf,
 }
 
 #[derive(Args, Debug)]
