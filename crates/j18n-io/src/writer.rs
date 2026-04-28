@@ -257,21 +257,39 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn sorts_keys_with_case_insensitive_primary_order() {
+	async fn sorts_numeric_keys_in_natural_order() {
 		let dir = TempDir::new().unwrap();
 		let definition = definition_in(&dir, "pt");
-		let reference = parse(r#"{"noSuggestions": "S", "none": "N", "noResults": "R"}"#);
+		let reference = parse(r#"{"0":"a","1":"b","10":"c","11":"d","2":"e"}"#);
 		let initial = reference.clone();
 
 		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
-		let none_pos = written.find("\"none\"").unwrap();
-		let no_results_pos = written.find("\"noResults\"").unwrap();
-		let no_suggestions_pos = written.find("\"noSuggestions\"").unwrap();
+		let positions: Vec<usize> = ["\"0\"", "\"1\"", "\"2\"", "\"10\"", "\"11\""]
+			.iter()
+			.map(|key| written.find(key).unwrap())
+			.collect();
 
-		assert!(none_pos < no_results_pos, "expected 'none' before 'noResults'");
-		assert!(no_results_pos < no_suggestions_pos, "expected 'noResults' before 'noSuggestions'");
+		for window in positions.windows(2) {
+			assert!(window[0] < window[1], "natural order violated: {:?}", positions);
+		}
+	}
+
+	#[tokio::test]
+	async fn sorts_camel_case_keys_with_uppercase_before_lowercase() {
+		let dir = TempDir::new().unwrap();
+		let definition = definition_in(&dir, "pt");
+		let reference = parse(r#"{"types": "T", "typeSelection": "S"}"#);
+		let initial = reference.clone();
+
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+
+		let written = fs::read_to_string(&definition.file).await.unwrap();
+		let type_selection_pos = written.find("\"typeSelection\"").unwrap();
+		let types_pos = written.find("\"types\"").unwrap();
+
+		assert!(type_selection_pos < types_pos, "expected typeSelection before types");
 	}
 
 	#[tokio::test]
