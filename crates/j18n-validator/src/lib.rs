@@ -92,3 +92,120 @@ fn interpolations_regex() -> &'static Regex {
 
 	INSTANCE.get_or_init(|| Regex::new(r"\{\{(.+?)\}\}").expect("valid interpolation regex"))
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use j18n_core::Language;
+	use tempfile::TempDir;
+
+	fn definition_in(dir: &TempDir, code: &str) -> I18nDefinition {
+		I18nDefinition::from_base_dir(dir.path(), Language::from_iso_639_code(code).unwrap())
+	}
+
+	#[test]
+	fn validate_translation_passes_when_counts_match() {
+		let result = TranslationValidator::validate_translation(&["a".into()], &["A".into()]);
+
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn validate_translation_errors_when_counts_differ() {
+		let err = TranslationValidator::validate_translation(&["a".into(), "b".into()], &["A".into()]).unwrap_err();
+
+		assert!(matches!(err, J18nError::Validation(_)));
+	}
+
+	#[test]
+	fn validate_data_returns_missing_translation_for_each_missing_key() {
+		let reference = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "Hi".into())],
+		};
+		let generated = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![],
+		};
+
+		let err = TranslationValidator::validate_data(&reference, &generated).unwrap_err();
+
+		match err {
+			J18nError::MissingTranslation { key } => assert_eq!(key, "greeting"),
+			other => panic!("unexpected error: {other:?}"),
+		}
+	}
+
+	#[test]
+	fn validate_data_passes_when_all_keys_present() {
+		let reference = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "Hi".into())],
+		};
+		let generated = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "Olá".into())],
+		};
+
+		assert!(TranslationValidator::validate_data(&reference, &generated).is_ok());
+	}
+
+	#[test]
+	fn validate_data_does_not_care_about_interpolation_drift_for_correctness_only_warns() {
+		let reference = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "Hi {{name}}".into())],
+		};
+		let generated = I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "Olá".into())],
+		};
+
+		assert!(TranslationValidator::validate_data(&reference, &generated).is_ok());
+	}
+
+	#[tokio::test]
+	async fn validate_translations_reads_files_and_passes_when_all_keys_present() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let generated = definition_in(&dir, "pt");
+
+		tokio::fs::write(&reference.json_file_path, r#"{"a": "x"}"#).await.unwrap();
+		tokio::fs::write(&generated.json_file_path, r#"{"a": "y"}"#).await.unwrap();
+
+		TranslationValidator::validate_translations(&reference, &[generated]).await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn validate_translations_errors_when_a_target_is_missing_keys() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let generated = definition_in(&dir, "pt");
+
+		tokio::fs::write(&reference.json_file_path, r#"{"a": "x", "b": "y"}"#)
+			.await
+			.unwrap();
+		tokio::fs::write(&generated.json_file_path, r#"{"a": "z"}"#).await.unwrap();
+
+		let err = TranslationValidator::validate_translations(&reference, &[generated])
+			.await
+			.unwrap_err();
+
+		match err {
+			J18nError::MissingTranslation { key } => assert_eq!(key, "b"),
+			other => panic!("unexpected error: {other:?}"),
+		}
+	}
+
+	#[test]
+	fn find_interpolations_returns_each_match() {
+		let interpolations = find_interpolations("hello {{a}} and {{b}}!");
+
+		assert_eq!(interpolations, vec!["{{a}}".to_string(), "{{b}}".to_string()]);
+	}
+
+	#[test]
+	fn find_interpolations_returns_empty_when_no_matches() {
+		assert!(find_interpolations("plain text").is_empty());
+	}
+}

@@ -14,3 +14,19 @@ impl fmt::Display for GenerationMode {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn display_uses_uppercase_constant_form() {
+		assert_eq!(GenerationMode::Sync.to_string(), "SYNC");
+		assert_eq!(GenerationMode::Regenerate.to_string(), "REGENERATE");
+	}
+
+	#[test]
+	fn modes_are_distinct() {
+		assert_ne!(GenerationMode::Sync, GenerationMode::Regenerate);
+	}
+}

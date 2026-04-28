@@ -95,3 +95,91 @@ fn serialize_pretty(value: &Map<String, Value>) -> Result<String, serde_json::Er
 
 	Ok(String::from_utf8(buffer).expect("serde_json always produces valid UTF-8"))
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use tempfile::TempDir;
+	use tokio::fs;
+
+	#[tokio::test]
+	async fn load_returns_empty_when_file_is_missing() {
+		let dir = TempDir::new().unwrap();
+		let path = dir.path().join(".hash-cache.json");
+
+		let loaded = I18nHashingCache::load_hash_cache_from(&path).await.unwrap();
+
+		assert!(loaded.json_key_to_hash_map.is_empty());
+	}
+
+	#[tokio::test]
+	async fn save_then_load_round_trip() {
+		let dir = TempDir::new().unwrap();
+		let path = dir.path().join(".hash-cache.json");
+		let mut original = HashMap::new();
+
+		original.insert("foo".to_string(), "abc".to_string());
+		original.insert("nested.key".to_string(), "def".to_string());
+
+		let hashing = I18nHashing {
+			json_key_to_hash_map: original.clone(),
+		};
+
+		I18nHashingCache::save_hash_cache_to(&hashing, &path).await.unwrap();
+
+		let loaded = I18nHashingCache::load_hash_cache_from(&path).await.unwrap();
+
+		assert_eq!(loaded.json_key_to_hash_map, original);
+	}
+
+	#[tokio::test]
+	async fn save_uses_tab_indentation_and_trailing_newline() {
+		let dir = TempDir::new().unwrap();
+		let path = dir.path().join(".hash-cache.json");
+		let mut map = HashMap::new();
+
+		map.insert("a".to_string(), "1".to_string());
+
+		let hashing = I18nHashing { json_key_to_hash_map: map };
+
+		I18nHashingCache::save_hash_cache_to(&hashing, &path).await.unwrap();
+
+		let written = fs::read_to_string(&path).await.unwrap();
+
+		assert_eq!(written, "{\n\t\"a\": \"1\"\n}\n");
+	}
+
+	#[tokio::test]
+	async fn save_writes_keys_in_sorted_order() {
+		let dir = TempDir::new().unwrap();
+		let path = dir.path().join(".hash-cache.json");
+		let mut map = HashMap::new();
+
+		map.insert("b".to_string(), "2".to_string());
+		map.insert("a".to_string(), "1".to_string());
+		map.insert("c".to_string(), "3".to_string());
+
+		let hashing = I18nHashing { json_key_to_hash_map: map };
+
+		I18nHashingCache::save_hash_cache_to(&hashing, &path).await.unwrap();
+
+		let written = fs::read_to_string(&path).await.unwrap();
+		let a_pos = written.find("\"a\"").unwrap();
+		let b_pos = written.find("\"b\"").unwrap();
+		let c_pos = written.find("\"c\"").unwrap();
+
+		assert!(a_pos < b_pos);
+		assert!(b_pos < c_pos);
+	}
+
+	#[test]
+	fn compute_hash_cache_uses_java_string_hashcode() {
+		let data = j18n_core::I18nData {
+			json_dict: Default::default(),
+			walked_tree_map: vec![("greeting".into(), "abc".into())],
+		};
+		let hashing = I18nHashingCache::compute_hash_cache_from(&data);
+
+		assert_eq!(hashing.json_key_to_hash_map.get("greeting").unwrap(), "17862");
+	}
+}

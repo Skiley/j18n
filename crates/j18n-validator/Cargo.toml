@@ -11,3 +11,7 @@ j18n-core.workspace = true
 j18n-io.workspace = true
 regex.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "rt"] }

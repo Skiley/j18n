@@ -50,3 +50,82 @@ fn format_signed_hex(value: i32) -> String {
 		format!("{:x}", widened)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn empty_string_hashes_to_zero() {
+		assert_eq!(java_string_hashcode_hex(""), "0");
+	}
+
+	#[test]
+	fn matches_known_java_hashcodes() {
+		assert_eq!(java_string_hashcode_hex("a"), "61");
+		assert_eq!(java_string_hashcode_hex("ab"), "c21");
+		assert_eq!(java_string_hashcode_hex("abc"), "17862");
+	}
+
+	#[test]
+	fn produces_negative_hex_for_strings_that_overflow_i32() {
+		let hash = java_string_hashcode_hex("Delete my account");
+
+		assert!(hash.starts_with('-'), "expected negative hex, got {hash}");
+	}
+
+	#[test]
+	fn matches_kotlin_hash_cache_values_for_real_strings() {
+		assert_eq!(
+			java_string_hashcode_hex("This account no longer exists."),
+			"10f79085"
+		);
+		assert_eq!(java_string_hashcode_hex("Delete my account"), "-8a0ced2");
+	}
+
+	#[test]
+	fn handles_unicode_via_utf16_units() {
+		let hash = java_string_hashcode_hex("héllo");
+
+		assert!(!hash.is_empty());
+		assert_eq!(hash, java_string_hashcode_hex("héllo"));
+	}
+
+	#[test]
+	fn compute_changed_keys_finds_added_removed_and_modified() {
+		let mut a = HashMap::new();
+
+		a.insert("kept_same".to_string(), "abc".to_string());
+		a.insert("modified".to_string(), "old".to_string());
+		a.insert("only_in_a".to_string(), "x".to_string());
+
+		let mut b = HashMap::new();
+
+		b.insert("kept_same".to_string(), "abc".to_string());
+		b.insert("modified".to_string(), "new".to_string());
+		b.insert("only_in_b".to_string(), "y".to_string());
+
+		let hashing_a = I18nHashing { json_key_to_hash_map: a };
+		let hashing_b = I18nHashing { json_key_to_hash_map: b };
+		let changed = hashing_a.compute_changed_keys(&hashing_b);
+
+		assert!(changed.contains("modified"));
+		assert!(changed.contains("only_in_a"));
+		assert!(changed.contains("only_in_b"));
+		assert!(!changed.contains("kept_same"));
+	}
+
+	#[test]
+	fn compute_changed_keys_returns_empty_when_identical() {
+		let mut map = HashMap::new();
+
+		map.insert("a".to_string(), "1".to_string());
+
+		let hashing_a = I18nHashing {
+			json_key_to_hash_map: map.clone(),
+		};
+		let hashing_b = I18nHashing { json_key_to_hash_map: map };
+
+		assert!(hashing_a.compute_changed_keys(&hashing_b).is_empty());
+	}
+}

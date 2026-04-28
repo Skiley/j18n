@@ -130,3 +130,111 @@ fn substitutions_regex() -> &'static Regex {
 
 	INSTANCE.get_or_init(|| Regex::new(r"\[(\d+?)\]").expect("valid substitution regex"))
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn create_extrapolated_value_handles_no_interpolations() {
+		let value = create_extrapolated_value("hello world");
+
+		assert_eq!(value.original_value, "hello world");
+		assert_eq!(value.extrapolated_value, "hello world");
+		assert!(value.interpolations_index_based.is_empty());
+	}
+
+	#[test]
+	fn create_extrapolated_value_replaces_each_interpolation_with_index_placeholder() {
+		let value = create_extrapolated_value("Hello {{name}}, welcome to {{place}}.");
+
+		assert_eq!(value.extrapolated_value, "Hello [0], welcome to [1].");
+		assert_eq!(
+			value.interpolations_index_based,
+			vec!["{{name}}".to_string(), "{{place}}".to_string()]
+		);
+	}
+
+	#[test]
+	fn create_extrapolated_value_keeps_html_tags_intact() {
+		let value = create_extrapolated_value("<b>{{user}}</b>, please click <a>here</a>");
+
+		assert_eq!(value.extrapolated_value, "<b>[0]</b>, please click <a>here</a>");
+	}
+
+	#[test]
+	fn create_extrapolated_value_handles_repeated_same_placeholder() {
+		let value = create_extrapolated_value("{{x}} and {{x}}");
+
+		assert_eq!(value.extrapolated_value, "[0] and [1]");
+		assert_eq!(value.interpolations_index_based.len(), 2);
+	}
+
+	#[test]
+	fn restore_extrapolated_value_round_trips_translation() {
+		let value = create_extrapolated_value("Hi {{user}}!");
+		let restored = restore_extrapolated_value(&value, "Olá [0]!").unwrap();
+
+		assert_eq!(restored, "Olá {{user}}!");
+	}
+
+	#[test]
+	fn restore_extrapolated_value_round_trips_multiple_placeholders() {
+		let value = create_extrapolated_value("{{a}} and {{b}}");
+		let restored = restore_extrapolated_value(&value, "[1] and [0]").unwrap();
+
+		assert_eq!(restored, "{{b}} and {{a}}");
+	}
+
+	#[test]
+	fn restore_extrapolated_value_errors_when_index_is_out_of_range() {
+		let value = create_extrapolated_value("Hi {{user}}");
+		let err = restore_extrapolated_value(&value, "Hi [5]").unwrap_err();
+
+		assert!(matches!(err, J18nError::Translator(_)));
+	}
+
+	#[test]
+	fn restore_extrapolated_value_errors_when_placeholder_is_missing() {
+		let value = create_extrapolated_value("Hi {{user}}");
+		let err = restore_extrapolated_value(&value, "Hi user").unwrap_err();
+
+		assert!(matches!(err, J18nError::Translator(_)));
+	}
+
+	#[test]
+	fn restore_extrapolated_value_succeeds_when_no_interpolations_exist() {
+		let value = create_extrapolated_value("hello");
+		let restored = restore_extrapolated_value(&value, "olá").unwrap();
+
+		assert_eq!(restored, "olá");
+	}
+
+	#[test]
+	fn create_extrapolated_values_processes_each_input() {
+		let inputs = vec!["{{a}}".to_string(), "no interp".to_string()];
+		let extrapolated = create_extrapolated_values(&inputs);
+
+		assert_eq!(extrapolated.len(), 2);
+		assert_eq!(extrapolated[0].extrapolated_value, "[0]");
+		assert_eq!(extrapolated[1].extrapolated_value, "no interp");
+	}
+
+	#[test]
+	fn restore_extrapolated_values_errors_on_count_mismatch() {
+		let extrapolated = create_extrapolated_values(&["a".to_string(), "b".to_string()]);
+		let translated = vec!["a".to_string()];
+		let err = restore_extrapolated_values(&extrapolated, &translated).unwrap_err();
+
+		assert!(matches!(err, J18nError::Translator(_)));
+	}
+
+	#[test]
+	fn restore_extrapolated_values_returns_in_order() {
+		let extrapolated = create_extrapolated_values(&["{{a}}".to_string(), "{{b}}".to_string()]);
+		let translated = vec!["[0]".to_string(), "[0]".to_string()];
+		let restored = restore_extrapolated_values(&extrapolated, &translated).unwrap();
+
+		assert_eq!(restored, vec!["{{a}}".to_string(), "{{b}}".to_string()]);
+	}
+}

@@ -188,3 +188,290 @@ fn merge_json_objects(first: &Map<String, Value>, second: &Map<String, Value>) -
 
 	merged
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use async_trait::async_trait;
+	use j18n_core::Language;
+	use j18n_io::{java_string_hashcode_hex, I18nHashing, I18nHashingCache};
+	use std::collections::HashMap;
+	use std::sync::Mutex;
+	use tempfile::TempDir;
+	use tokio::fs;
+
+	#[derive(Default)]
+	struct MockTranslator {
+		captured: Mutex<Vec<(Language, Language, Vec<String>)>>,
+		responses: Mutex<HashMap<String, String>>,
+	}
+
+	impl MockTranslator {
+		fn with_response(self, input: &str, output: &str) -> Self {
+			self.responses.lock().unwrap().insert(input.into(), output.into());
+			self
+		}
+
+		fn captured_inputs(&self) -> Vec<String> {
+			self.captured
+				.lock()
+				.unwrap()
+				.iter()
+				.flat_map(|(_, _, values)| values.iter().cloned())
+				.collect()
+		}
+	}
+
+	#[async_trait]
+	impl I18nTranslator for MockTranslator {
+		fn translator_id(&self) -> &str {
+			"mock"
+		}
+
+		async fn translate_i18n_values(
+			&self,
+			from: Language,
+			to: Language,
+			values: Vec<String>,
+		) -> j18n_core::J18nResult<Vec<String>> {
+			self.captured.lock().unwrap().push((from, to, values.clone()));
+
+			let responses = self.responses.lock().unwrap();
+			let translated = values
+				.iter()
+				.map(|value| {
+					responses
+						.get(value)
+						.cloned()
+						.unwrap_or_else(|| format!("[{}]{value}", to.iso_639_code()))
+				})
+				.collect();
+
+			Ok(translated)
+		}
+	}
+
+	fn definition_in(dir: &TempDir, code: &str) -> I18nDefinition {
+		I18nDefinition::from_base_dir(dir.path(), Language::from_iso_639_code(code).unwrap())
+	}
+
+	async fn read_json(path: &std::path::Path) -> Map<String, Value> {
+		let raw = fs::read_to_string(path).await.unwrap();
+
+		serde_json::from_str(&raw).unwrap()
+	}
+
+	#[tokio::test]
+	async fn sync_without_hash_cache_treats_every_key_as_changed() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&target.json_file_path, r#"{"a": "AA"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Sync)
+			.await
+			.unwrap();
+
+		let mut inputs = translator.captured_inputs();
+
+		inputs.sort();
+		assert_eq!(inputs, vec!["A".to_string(), "B".to_string()]);
+	}
+
+	#[tokio::test]
+	async fn sync_only_translates_missing_keys_when_hash_cache_matches() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&target.json_file_path, r#"{"a": "AA"}"#).await.unwrap();
+
+		let mut cache = HashMap::new();
+
+		cache.insert("a".to_string(), java_string_hashcode_hex("A"));
+		cache.insert("b".to_string(), java_string_hashcode_hex("B"));
+
+		I18nHashingCache::save_hash_cache_to(
+			&I18nHashing {
+				json_key_to_hash_map: cache,
+			},
+			&dir.path().join(".hash-cache.json"),
+		)
+		.await
+		.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Sync)
+			.await
+			.unwrap();
+
+		assert_eq!(translator.captured_inputs(), vec!["B".to_string()]);
+
+		let written = read_json(&target.json_file_path).await;
+
+		assert_eq!(written["a"], "AA");
+		assert_eq!(written["b"], "[pt]B");
+	}
+
+	#[tokio::test]
+	async fn sync_translates_keys_changed_per_hash_cache() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&target.json_file_path, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		let mut cache = HashMap::new();
+
+		cache.insert("a".to_string(), java_string_hashcode_hex("A"));
+		cache.insert("b".to_string(), java_string_hashcode_hex("B-old"));
+
+		I18nHashingCache::save_hash_cache_to(
+			&I18nHashing {
+				json_key_to_hash_map: cache,
+			},
+			&dir.path().join(".hash-cache.json"),
+		)
+		.await
+		.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Sync)
+			.await
+			.unwrap();
+
+		assert_eq!(translator.captured_inputs(), vec!["B".to_string()]);
+
+		let written = read_json(&target.json_file_path).await;
+
+		assert_eq!(written["a"], "AA");
+		assert_eq!(written["b"], "[pt]B");
+	}
+
+	#[tokio::test]
+	async fn regenerate_translates_every_key_overwriting_existing_translations() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&target.json_file_path, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Regenerate)
+			.await
+			.unwrap();
+
+		let mut inputs = translator.captured_inputs();
+
+		inputs.sort();
+		assert_eq!(inputs, vec!["A".to_string(), "B".to_string()]);
+
+		let written = read_json(&target.json_file_path).await;
+
+		assert_eq!(written["a"], "[pt]A");
+		assert_eq!(written["b"], "[pt]B");
+	}
+
+	#[tokio::test]
+	async fn target_keys_absent_from_reference_are_pruned() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"keep": "K"}"#).await.unwrap();
+		fs::write(&target.json_file_path, r#"{"keep": "KK", "stale": "S"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Sync)
+			.await
+			.unwrap();
+
+		let written = read_json(&target.json_file_path).await;
+
+		assert!(written.contains_key("keep"));
+		assert!(!written.contains_key("stale"));
+	}
+
+	#[tokio::test]
+	async fn hash_cache_is_written_after_run() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[target], GenerationMode::Sync)
+			.await
+			.unwrap();
+
+		let cache_path = dir.path().join(".hash-cache.json");
+
+		assert!(cache_path.exists());
+
+		let cache = I18nHashingCache::load_hash_cache_from(&cache_path).await.unwrap();
+
+		assert_eq!(
+			cache.json_key_to_hash_map.get("a").unwrap(),
+			&java_string_hashcode_hex("A")
+		);
+	}
+
+	#[tokio::test]
+	async fn nested_keys_round_trip_through_dot_separated_paths() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let target = definition_in(&dir, "pt");
+
+		fs::write(
+			&reference.json_file_path,
+			r#"{"section": {"a": "A", "b": "B"}}"#,
+		)
+		.await
+		.unwrap();
+
+		let translator = MockTranslator::default()
+			.with_response("A", "AA-pt")
+			.with_response("B", "BB-pt");
+
+		I18nGenerator::execute(&translator, &reference, &[target.clone()], GenerationMode::Regenerate)
+			.await
+			.unwrap();
+
+		let written = read_json(&target.json_file_path).await;
+
+		assert_eq!(written["section"]["a"], "AA-pt");
+		assert_eq!(written["section"]["b"], "BB-pt");
+	}
+
+	#[tokio::test]
+	async fn regenerate_runs_against_multiple_target_languages() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+		let es = definition_in(&dir, "es");
+
+		fs::write(&reference.json_file_path, r#"{"a": "A"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(&translator, &reference, &[pt.clone(), es.clone()], GenerationMode::Regenerate)
+			.await
+			.unwrap();
+
+		assert_eq!(read_json(&pt.json_file_path).await["a"], "[pt]A");
+		assert_eq!(read_json(&es.json_file_path).await["a"], "[es]A");
+	}
+}

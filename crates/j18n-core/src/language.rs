@@ -172,3 +172,66 @@ pub const ALL_LANGUAGES: &[Language] = &[
 	lang("yo", "Yoruba"),
 	lang("zu", "Zulu"),
 ];
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::collections::HashSet;
+
+	#[test]
+	fn from_iso_639_code_finds_known_language() {
+		let language = Language::from_iso_639_code("en").unwrap();
+
+		assert_eq!(language.iso_639_code(), "en");
+		assert_eq!(language.language_name(), "English");
+	}
+
+	#[test]
+	fn from_iso_639_code_distinguishes_chinese_variants() {
+		let simplified = Language::from_iso_639_code("zh-CN").unwrap();
+		let traditional = Language::from_iso_639_code("zh-TW").unwrap();
+
+		assert_eq!(simplified.language_name(), "Chinese (Simplified)");
+		assert_eq!(traditional.language_name(), "Chinese (Traditional)");
+	}
+
+	#[test]
+	fn from_iso_639_code_returns_error_for_unknown_code() {
+		let err = Language::from_iso_639_code("xx").unwrap_err();
+
+		match err {
+			crate::J18nError::LanguageNotFound { code } => assert_eq!(code, "xx"),
+			other => panic!("unexpected error: {other:?}"),
+		}
+	}
+
+	#[test]
+	fn english_constant_matches_lookup() {
+		let looked_up = Language::from_iso_639_code("en").unwrap();
+
+		assert_eq!(Language::ENGLISH, looked_up);
+	}
+
+	#[test]
+	fn all_languages_have_unique_iso_codes() {
+		let mut seen = HashSet::new();
+
+		for language in ALL_LANGUAGES {
+			assert!(
+				seen.insert(language.iso_639_code()),
+				"duplicate ISO-639 code: {}",
+				language.iso_639_code()
+			);
+		}
+	}
+
+	#[test]
+	fn portuguese_filipino_and_hebrew_are_present() {
+		for code in ["pt", "fil", "he"] {
+			assert!(
+				Language::from_iso_639_code(code).is_ok(),
+				"missing language for code {code}"
+			);
+		}
+	}
+}
