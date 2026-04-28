@@ -1,3 +1,4 @@
+use crate::compare::natural_key_cmp;
 use j18n_core::{I18nDefinition, J18nError, J18nResult};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -20,7 +21,8 @@ pub async fn write_i18n_tree_map(
 	}
 
 	let cleaned_json_dict = remove_keys_absent_from_reference_dict(reference_json_dict, &translated_json_dict);
-	let serialized = serialize_pretty(&cleaned_json_dict, indent).map_err(|source| J18nError::Json {
+	let sorted_json_dict = sort_object_recursively(cleaned_json_dict);
+	let serialized = serialize_pretty(&sorted_json_dict, indent).map_err(|source| J18nError::Json {
 		path: definition.file.clone(),
 		source,
 	})?;
@@ -98,6 +100,28 @@ fn remove_keys_absent_from_reference_dict(
 	result
 }
 
+fn sort_object_recursively(map: Map<String, Value>) -> Map<String, Value> {
+	let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+
+	entries.sort_by(|(a, _), (b, _)| natural_key_cmp(a, b));
+
+	let mut result = Map::new();
+
+	for (key, value) in entries {
+		result.insert(key, sort_value_recursively(value));
+	}
+
+	result
+}
+
+fn sort_value_recursively(value: Value) -> Value {
+	match value {
+		Value::Object(map) => Value::Object(sort_object_recursively(map)),
+		Value::Array(items) => Value::Array(items.into_iter().map(sort_value_recursively).collect()),
+		other => other,
+	}
+}
+
 fn serialize_pretty(value: &Map<String, Value>, indent: &[u8]) -> Result<String, serde_json::Error> {
 	let formatter = serde_json::ser::PrettyFormatter::with_indent(indent);
 	let mut buffer = Vec::new();
@@ -119,8 +143,12 @@ mod tests {
 	}
 
 	fn definition_in(dir: &TempDir, code: &str) -> I18nDefinition {
+		let file = dir.path().join(format!("{code}.json"));
+		let id = format!("{code}.json");
+
 		I18nDefinition {
-			file: dir.path().join(format!("{code}.json")),
+			file,
+			id,
 			language: code.to_string(),
 		}
 	}
@@ -211,11 +239,64 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn sorts_top_level_keys_alphabetically() {
+		let dir = TempDir::new().unwrap();
+		let definition = definition_in(&dir, "pt");
+		let reference = parse(r#"{"zebra": "Z", "apple": "A", "mango": "M"}"#);
+		let initial = reference.clone();
+
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+
+		let written = fs::read_to_string(&definition.file).await.unwrap();
+		let apple_pos = written.find("\"apple\"").unwrap();
+		let mango_pos = written.find("\"mango\"").unwrap();
+		let zebra_pos = written.find("\"zebra\"").unwrap();
+
+		assert!(apple_pos < mango_pos);
+		assert!(mango_pos < zebra_pos);
+	}
+
+	#[tokio::test]
+	async fn sorts_keys_with_case_insensitive_primary_order() {
+		let dir = TempDir::new().unwrap();
+		let definition = definition_in(&dir, "pt");
+		let reference = parse(r#"{"noSuggestions": "S", "none": "N", "noResults": "R"}"#);
+		let initial = reference.clone();
+
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+
+		let written = fs::read_to_string(&definition.file).await.unwrap();
+		let none_pos = written.find("\"none\"").unwrap();
+		let no_results_pos = written.find("\"noResults\"").unwrap();
+		let no_suggestions_pos = written.find("\"noSuggestions\"").unwrap();
+
+		assert!(none_pos < no_results_pos, "expected 'none' before 'noResults'");
+		assert!(no_results_pos < no_suggestions_pos, "expected 'noResults' before 'noSuggestions'");
+	}
+
+	#[tokio::test]
+	async fn sorts_nested_keys_recursively() {
+		let dir = TempDir::new().unwrap();
+		let definition = definition_in(&dir, "pt");
+		let reference = parse(r#"{"section": {"zebra": "Z", "apple": "A"}}"#);
+		let initial = reference.clone();
+
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+
+		let written = fs::read_to_string(&definition.file).await.unwrap();
+		let apple_pos = written.find("\"apple\"").unwrap();
+		let zebra_pos = written.find("\"zebra\"").unwrap();
+
+		assert!(apple_pos < zebra_pos);
+	}
+
+	#[tokio::test]
 	async fn creates_parent_directories_when_missing() {
 		let dir = TempDir::new().unwrap();
 		let nested_dir = dir.path().join("does/not/exist");
 		let definition = I18nDefinition {
 			file: nested_dir.join("pt.json"),
+			id: "pt.json".to_string(),
 			language: "pt".to_string(),
 		};
 		let reference = parse(r#"{"a": "x"}"#);

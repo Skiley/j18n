@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct I18nDefinition {
 	pub file: PathBuf,
+	pub id: String,
 	pub language: String,
 }
 
@@ -49,24 +49,15 @@ mod tests {
 	}
 
 	#[test]
-	fn i18n_definition_deserializes_from_json() {
-		let json = r#"{ "file": "locales/en.json", "language": "English" }"#;
-		let definition: I18nDefinition = serde_json::from_str(json).unwrap();
-
-		assert_eq!(definition.file, PathBuf::from("locales/en.json"));
-		assert_eq!(definition.language, "English");
-	}
-
-	#[test]
-	fn i18n_definition_serializes_to_json_with_expected_keys() {
+	fn i18n_definition_keeps_id_separate_from_resolved_path() {
 		let definition = I18nDefinition {
-			file: PathBuf::from("locales/pt.json"),
+			file: PathBuf::from("/abs/locales/pt.json"),
+			id: "locales/pt.json".to_string(),
 			language: "Brazilian Portuguese".to_string(),
 		};
-		let serialized = serde_json::to_string(&definition).unwrap();
 
-		assert!(serialized.contains("\"file\""));
-		assert!(serialized.contains("\"language\""));
-		assert!(serialized.contains("Brazilian Portuguese"));
+		assert_eq!(definition.file, PathBuf::from("/abs/locales/pt.json"));
+		assert_eq!(definition.id, "locales/pt.json");
+		assert_eq!(definition.language, "Brazilian Portuguese");
 	}
 }

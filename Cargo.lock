@@ -611,6 +611,7 @@ dependencies = [
  "j18n-core",
  "j18n-gemini-api",
  "j18n-generator",
+ "j18n-io",
  "j18n-translator",
  "j18n-validator",
  "regex",

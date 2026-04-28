@@ -4,7 +4,7 @@ pub use options::J18nOptions;
 
 use futures::stream::{self, StreamExt};
 use j18n_core::{GenerationMode, I18nDefinition, J18nResult};
-use j18n_io::{detect_indentation, read_i18n_data, write_i18n_tree_map, I18nHashingCache, DEFAULT_INDENT};
+use j18n_io::{detect_indentation, read_i18n_data, write_i18n_tree_map, I18nHashing, I18nHashingCache, DEFAULT_INDENT};
 use j18n_translator::{create_extrapolated_values, restore_extrapolated_values, I18nTranslator};
 use j18n_validator::TranslationValidator;
 use serde_json::{Map, Value};
@@ -12,6 +12,10 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::info;
+
+pub fn target_identifier(definition: &I18nDefinition) -> String {
+	format!("{}@{}", definition.id, definition.language)
+}
 
 pub struct I18nGenerator;
 
@@ -27,37 +31,43 @@ impl I18nGenerator {
 		T: I18nTranslator + ?Sized,
 	{
 		let reference_data = read_i18n_data(reference_i18n, &options.exclude_patterns).await?;
-		let reference_entries = reference_data.walked_tree_map.clone();
-		let reference_cached_hashing = I18nHashingCache::load_hash_cache_from(&options.hash_cache_path).await?;
-		let reference_current_hashing = I18nHashingCache::compute_hash_cache_from(&reference_data);
-		let changed_keys_since_last_hashing =
-			reference_cached_hashing.compute_changed_keys(&reference_current_hashing);
+		let reference_hashing = I18nHashing::from_i18n_data(&reference_data);
+		let mut hash_cache = I18nHashingCache::load_from(&options.hash_cache_path).await?;
 
 		info!(
 			"Scanned {} total entries from {} dict",
-			reference_entries.len(),
+			reference_data.walked_tree_map.len(),
 			reference_i18n.language
-		);
-		info!(
-			"{} keys changed since last translation",
-			changed_keys_since_last_hashing.len()
 		);
 
 		for target in generate_i18n_for {
+			let target_id = target_identifier(target);
+			let cached_hashing = hash_cache
+				.get(&target_id)
+				.cloned()
+				.unwrap_or_else(I18nHashing::empty);
+			let changed_keys = cached_hashing.compute_changed_keys(&reference_hashing);
+
+			info!(
+				"{} keys changed since {} was last synced",
+				changed_keys.len(),
+				target.language
+			);
+
 			translate_into_target(
 				translator,
 				reference_i18n,
 				&reference_data,
-				&reference_entries,
-				&changed_keys_since_last_hashing,
+				&changed_keys,
 				target,
 				mode,
 				options,
 			)
 			.await?;
-		}
 
-		I18nHashingCache::save_hash_cache_to(&reference_current_hashing, &options.hash_cache_path).await?;
+			hash_cache.set(target_id, reference_hashing.clone());
+			hash_cache.save_to(&options.hash_cache_path).await?;
+		}
 
 		Ok(())
 	}
@@ -68,7 +78,6 @@ async fn translate_into_target<T>(
 	translator: &T,
 	reference_i18n: &I18nDefinition,
 	reference_data: &j18n_core::I18nData,
-	reference_entries: &[(String, String)],
 	changed_keys_since_last_hashing: &BTreeSet<String>,
 	target: &I18nDefinition,
 	mode: GenerationMode,
@@ -78,8 +87,9 @@ where
 	T: I18nTranslator + ?Sized,
 {
 	let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
+	let reference_entries = &reference_data.walked_tree_map;
 	let entries_to_translate: Vec<(String, String)> = match mode {
-		GenerationMode::Regenerate => reference_entries.to_vec(),
+		GenerationMode::Regenerate => reference_entries.clone(),
 		GenerationMode::Sync => {
 			let target_keys: BTreeSet<&str> = target_data.walked_tree_map.iter().map(|(k, _)| k.as_str()).collect();
 
@@ -279,8 +289,12 @@ mod tests {
 	}
 
 	fn definition_in(dir: &TempDir, code: &str) -> I18nDefinition {
+		let file = dir.path().join(format!("{code}.json"));
+		let id = format!("{code}.json");
+
 		I18nDefinition {
-			file: dir.path().join(format!("{code}.json")),
+			file,
+			id,
 			language: code.to_string(),
 		}
 	}
@@ -341,19 +355,16 @@ mod tests {
 			.unwrap();
 		fs::write(&target.file, r#"{"a": "AA"}"#).await.unwrap();
 
-		let mut cache = HashMap::new();
+		let mut cache = I18nHashingCache::empty();
+		let mut hashes = HashMap::new();
 
-		cache.insert("a".to_string(), java_string_hashcode_hex("A"));
-		cache.insert("b".to_string(), java_string_hashcode_hex("B"));
-
-		I18nHashingCache::save_hash_cache_to(
-			&I18nHashing {
-				json_key_to_hash_map: cache,
-			},
-			&dir.path().join(".hash-cache.json"),
-		)
-		.await
-		.unwrap();
+		hashes.insert("a".to_string(), java_string_hashcode_hex("A"));
+		hashes.insert("b".to_string(), java_string_hashcode_hex("B"));
+		cache.set(
+			target_identifier(&target),
+			I18nHashing { json_key_to_hash_map: hashes },
+		);
+		cache.save_to(&dir.path().join(".hash-cache.json")).await.unwrap();
 
 		let translator = MockTranslator::default();
 
@@ -449,7 +460,7 @@ mod tests {
 		I18nGenerator::execute(
 			&translator,
 			&reference,
-			&[target],
+			&[target.clone()],
 			GenerationMode::Sync,
 			&default_options(&dir),
 		)
@@ -460,10 +471,11 @@ mod tests {
 
 		assert!(cache_path.exists());
 
-		let cache = I18nHashingCache::load_hash_cache_from(&cache_path).await.unwrap();
+		let cache = I18nHashingCache::load_from(&cache_path).await.unwrap();
+		let hashing = cache.get(&target_identifier(&target)).unwrap();
 
 		assert_eq!(
-			cache.json_key_to_hash_map.get("a").unwrap(),
+			hashing.json_key_to_hash_map.get("a").unwrap(),
 			&java_string_hashcode_hex("A")
 		);
 	}
@@ -601,19 +613,16 @@ mod tests {
 		fs::write(&target.file, "{\n    \"a\": \"AA\"\n}\n").await.unwrap();
 
 		let translator = MockTranslator::default();
-		let mut cache = HashMap::new();
+		let mut cache = I18nHashingCache::empty();
+		let mut hashes = HashMap::new();
 
-		cache.insert("a".to_string(), java_string_hashcode_hex("A"));
-		cache.insert("b".to_string(), java_string_hashcode_hex("B"));
-
-		I18nHashingCache::save_hash_cache_to(
-			&I18nHashing {
-				json_key_to_hash_map: cache,
-			},
-			&dir.path().join(".hash-cache.json"),
-		)
-		.await
-		.unwrap();
+		hashes.insert("a".to_string(), java_string_hashcode_hex("A"));
+		hashes.insert("b".to_string(), java_string_hashcode_hex("B"));
+		cache.set(
+			target_identifier(&target),
+			I18nHashing { json_key_to_hash_map: hashes },
+		);
+		cache.save_to(&dir.path().join(".hash-cache.json")).await.unwrap();
 
 		I18nGenerator::execute(
 			&translator,

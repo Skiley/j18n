@@ -16,7 +16,7 @@
 					}
 				},
 				"os:windows": {
-					"prepend": {
+					"append": {
 						"after": [{ "target": "wsl:build" }]
 					},
 					"env": {

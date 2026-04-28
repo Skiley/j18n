@@ -22,18 +22,21 @@ The project is a Cargo workspace with one crate per concern:
 ## CLI
 
 ```
-j18n init       <PATH>
-j18n sync       <CONFIG>...
-j18n regenerate <CONFIG>...
+j18n init                <PATH>
+j18n sync                <CONFIG>...
+j18n regenerate          <CONFIG>...
+j18n migrate-hash-cache  <CONFIG> <HASH_CACHE>
 ```
 
 - `init` – write a skeleton JSON configuration file at `<PATH>`. Refuses to
   overwrite an existing file. Creates parent directories as needed.
 - `sync` – translate only entries that are missing in the target file or whose
-  reference value changed since the last run (tracked via `.hash-cache.json`
-  next to the reference file).
+  reference value changed since that target was last synced (tracked
+  per-target in `.hash-cache.json` next to the reference file).
 - `regenerate` – re-translate every entry in the reference, replacing the
   existing values.
+- `migrate-hash-cache` – one-shot migration of an old flat hash-cache file
+  into the per-target structure. Temporary; will be removed.
 
 Each positional `<CONFIG>` is a path to a JSON configuration file (see below);
 the tool runs the chosen mode against each config in sequence.
@@ -128,7 +131,7 @@ The writer auto-detects the indent of the existing target file when syncing,
 or otherwise the indent of the reference file. Falls back to a single tab if
 neither file has indented lines. The hash cache is always tab-indented.
 
-### Hash cache location
+### Hash cache location and structure
 
 The hash cache tracks which reference values changed between runs. By default
 it lives at `<dirname(referenceI18n.file)>/.hash-cache.json`. Override the
@@ -143,6 +146,34 @@ location with `hashCacheLocation`:
 
 Useful if you want the cache out of your locales directory or under a
 different name.
+
+The file is keyed by target — one entry per `generateI18nFor` element, under
+the compound id `<resolved-file>@<language>`:
+
+```json
+{
+    "src/i18n/locale/pt.json@Brazilian Portuguese": {
+        "greeting": "10f79085",
+        "farewell": "-8a0ced2"
+    },
+    "src/i18n/locale/es.json@Spanish": {
+        "greeting": "10f79085",
+        "farewell": "-8a0ced2"
+    }
+}
+```
+
+Each target's entry is updated and persisted as soon as that target finishes
+syncing. If sync fails partway through (say, target #19 of 21), targets 1–18
+keep their up-to-date entries — they won't be re-translated on the next run.
+
+#### Migrating an old (flat) cache
+
+`j18n migrate-hash-cache <CONFIG> <HASH_CACHE>` rewrites a flat
+`{ "key": "hash", ... }` file into the per-target shape, copying the same
+hashing under each target id from the config. Use this once, after upgrading,
+if you have existing flat cache files. The subcommand is temporary and will
+be removed in a future release.
 
 ## Backends
 

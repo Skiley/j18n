@@ -1,3 +1,4 @@
+use j18n_core::I18nData;
 use std::collections::{BTreeSet, HashMap};
 
 #[derive(Clone, Debug, Default)]
@@ -6,6 +7,20 @@ pub struct I18nHashing {
 }
 
 impl I18nHashing {
+	pub fn empty() -> Self {
+		Self::default()
+	}
+
+	pub fn from_i18n_data(data: &I18nData) -> Self {
+		let json_key_to_hash_map = data
+			.walked_tree_map
+			.iter()
+			.map(|(key, value)| (key.clone(), java_string_hashcode_hex(value)))
+			.collect();
+
+		Self { json_key_to_hash_map }
+	}
+
 	pub fn compute_changed_keys(&self, compare_with: &I18nHashing) -> BTreeSet<String> {
 		let mut changed_keys = BTreeSet::new();
 		let mut all_keys = BTreeSet::new();

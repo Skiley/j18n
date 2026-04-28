@@ -1,8 +1,14 @@
 use anyhow::{Context, Result};
-use j18n_core::{I18nDefinition, PathPattern};
+use j18n_core::PathPattern;
 use j18n_translator::compile_interpolation_patterns;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+pub struct DefinitionEntry {
+	pub file: String,
+	pub language: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct I18nToolConfig {
@@ -16,7 +22,7 @@ pub struct I18nToolConfig {
 	pub exclude_patterns: Vec<String>,
 
 	#[serde(rename = "generateI18nFor")]
-	pub generate_i18n_for: Vec<I18nDefinition>,
+	pub generate_i18n_for: Vec<DefinitionEntry>,
 
 	#[serde(rename = "hashCacheLocation", default)]
 	pub hash_cache_location: Option<PathBuf>,
@@ -28,7 +34,7 @@ pub struct I18nToolConfig {
 	pub parallel_batches: usize,
 
 	#[serde(rename = "referenceI18n")]
-	pub reference_i18n: I18nDefinition,
+	pub reference_i18n: DefinitionEntry,
 
 	pub translator: TranslatorKind,
 }
@@ -114,10 +120,10 @@ mod tests {
 		assert_eq!(config.parallel_batches, 3);
 		assert_eq!(config.exclude_patterns, vec!["sample.**".to_string()]);
 		assert_eq!(config.interpolation_patterns, vec!["\\{\\{(.+?)\\}\\}".to_string()]);
-		assert_eq!(config.reference_i18n.file, PathBuf::from("locales/en.json"));
+		assert_eq!(config.reference_i18n.file, "locales/en.json");
 		assert_eq!(config.reference_i18n.language, "English");
 		assert_eq!(config.generate_i18n_for.len(), 2);
-		assert_eq!(config.generate_i18n_for[0].file, PathBuf::from("locales/pt.json"));
+		assert_eq!(config.generate_i18n_for[0].file, "locales/pt.json");
 		assert_eq!(config.generate_i18n_for[0].language, "Brazilian Portuguese");
 		assert!(matches!(config.translator, TranslatorKind::ClaudeCode));
 		assert!(config.hash_cache_location.is_none());

@@ -2,17 +2,19 @@ mod args;
 mod config;
 
 use anyhow::{Context, Result};
-use args::{Cli, Command, CommandArgs, InitArgs};
+use args::{Cli, Command, CommandArgs, InitArgs, MigrateHashCacheArgs};
 use clap::Parser;
-use config::TranslatorKind;
+use config::{DefinitionEntry, TranslatorKind};
 #[cfg(test)]
 use config::I18nToolConfig;
 use j18n_claude_code::ClaudeCodeBasedI18nTranslator;
 use j18n_core::{GenerationMode, I18nDefinition};
 use j18n_gemini_api::GeminiApiI18nTranslator;
-use j18n_generator::{I18nGenerator, J18nOptions};
+use j18n_generator::{target_identifier, I18nGenerator, J18nOptions};
+use j18n_io::{I18nHashing, I18nHashingCache};
 use j18n_translator::I18nTranslator;
 use j18n_validator::TranslationValidator;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -42,9 +44,44 @@ async fn main() -> Result<()> {
 
 	match cli.command {
 		Command::Init(args) => init(args).await,
+		Command::MigrateHashCache(args) => migrate_hash_cache(args).await,
 		Command::Sync(args) => run(args, GenerationMode::Sync).await,
 		Command::Regenerate(args) => run(args, GenerationMode::Regenerate).await,
 	}
+}
+
+async fn migrate_hash_cache(args: MigrateHashCacheArgs) -> Result<()> {
+	let config = config::load_config(&args.config)?;
+	let generated_i18ns: Vec<I18nDefinition> = config
+		.generate_i18n_for
+		.iter()
+		.map(|definition| resolve_definition(&args.config, definition))
+		.collect();
+
+	let raw = std::fs::read(&args.hash_cache)
+		.with_context(|| format!("failed to read hash-cache file \"{}\"", args.hash_cache.display()))?;
+	let flat: HashMap<String, String> = serde_json::from_slice(&raw)
+		.with_context(|| format!("failed to parse flat hash-cache file \"{}\"", args.hash_cache.display()))?;
+	let flat_hashing = I18nHashing { json_key_to_hash_map: flat };
+
+	let mut migrated = I18nHashingCache::empty();
+
+	for target in &generated_i18ns {
+		migrated.set(target_identifier(target), flat_hashing.clone());
+	}
+
+	migrated
+		.save_to(&args.hash_cache)
+		.await
+		.with_context(|| format!("failed to write migrated hash-cache file \"{}\"", args.hash_cache.display()))?;
+
+	info!(
+		"Migrated {} target entries into \"{}\"",
+		generated_i18ns.len(),
+		args.hash_cache.display()
+	);
+
+	Ok(())
 }
 
 async fn init(args: InitArgs) -> Result<()> {
@@ -115,10 +152,11 @@ async fn run(args: CommandArgs, mode: GenerationMode) -> Result<()> {
 	Ok(())
 }
 
-fn resolve_definition(config_path: &Path, definition: &I18nDefinition) -> I18nDefinition {
+fn resolve_definition(config_path: &Path, entry: &DefinitionEntry) -> I18nDefinition {
 	I18nDefinition {
-		file: resolve_relative(config_path, &definition.file),
-		language: definition.language.clone(),
+		file: resolve_relative(config_path, Path::new(&entry.file)),
+		id: entry.file.clone(),
+		language: entry.language.clone(),
 	}
 }
 
@@ -184,10 +222,10 @@ mod tests {
 		let parsed: I18nToolConfig = serde_json::from_str(SKELETON_CONFIG).unwrap();
 
 		assert_eq!(parsed.reference_i18n.language, "English");
-		assert_eq!(parsed.reference_i18n.file, PathBuf::from("locales/en.json"));
+		assert_eq!(parsed.reference_i18n.file, "locales/en.json");
 		assert_eq!(parsed.generate_i18n_for.len(), 1);
 		assert_eq!(parsed.generate_i18n_for[0].language, "Portuguese");
-		assert_eq!(parsed.generate_i18n_for[0].file, PathBuf::from("locales/pt.json"));
+		assert_eq!(parsed.generate_i18n_for[0].file, "locales/pt.json");
 		assert!(matches!(parsed.translator, TranslatorKind::ClaudeCode));
 		assert_eq!(parsed.batch_size, 50);
 		assert_eq!(parsed.parallel_batches, 3);
@@ -227,16 +265,17 @@ mod tests {
 	}
 
 	#[test]
-	fn resolve_definition_resolves_file_and_keeps_language() {
+	fn resolve_definition_resolves_file_and_keeps_id_and_language() {
 		let resolved = resolve_definition(
 			Path::new("/configs/api.json"),
-			&I18nDefinition {
-				file: PathBuf::from("locales/pt.json"),
+			&DefinitionEntry {
+				file: "locales/pt.json".to_string(),
 				language: "Brazilian Portuguese".to_string(),
 			},
 		);
 
 		assert_eq!(resolved.file, PathBuf::from("/configs").join("locales/pt.json"));
+		assert_eq!(resolved.id, "locales/pt.json");
 		assert_eq!(resolved.language, "Brazilian Portuguese");
 	}
 

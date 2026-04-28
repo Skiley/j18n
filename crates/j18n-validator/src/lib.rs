@@ -111,8 +111,12 @@ mod tests {
 	}
 
 	fn definition_in(dir: &TempDir, code: &str) -> I18nDefinition {
+		let file = dir.path().join(format!("{code}.json"));
+		let id = format!("{code}.json");
+
 		I18nDefinition {
-			file: dir.path().join(format!("{code}.json")),
+			file,
+			id,
 			language: code.to_string(),
 		}
 	}
