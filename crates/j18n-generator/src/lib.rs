@@ -3,18 +3,90 @@ pub mod options;
 pub use options::J18nOptions;
 
 use futures::stream::{self, StreamExt};
-use j18n_core::{GenerationMode, I18nDefinition, J18nResult};
-use j18n_io::{detect_indentation, read_i18n_data, write_i18n_tree_map, I18nHashing, I18nHashingCache, DEFAULT_INDENT};
+use j18n_core::{GenerationMode, I18nData, I18nDefinition, J18nResult};
+use j18n_io::{
+	detect_indentation, java_string_hashcode_hex, read_i18n_data, write_i18n_tree_map, I18nHashing, I18nHashingCache,
+	DEFAULT_INDENT,
+};
 use j18n_translator::{create_extrapolated_values, restore_extrapolated_values, I18nTranslator};
 use j18n_validator::TranslationValidator;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 pub fn target_identifier(definition: &I18nDefinition) -> String {
 	format!("{}@{}", definition.id, definition.language)
+}
+
+#[derive(Clone, Debug)]
+pub struct TargetCheckResult {
+	pub target: I18nDefinition,
+	pub missing_or_changed_keys: Vec<String>,
+	pub stale_keys: Vec<String>,
+}
+
+impl TargetCheckResult {
+	pub fn needs_sync(&self) -> bool {
+		!self.missing_or_changed_keys.is_empty() || !self.stale_keys.is_empty()
+	}
+}
+
+#[derive(Clone, Debug)]
+pub struct CheckReport {
+	pub reference_entries: usize,
+	pub targets: Vec<TargetCheckResult>,
+}
+
+impl CheckReport {
+	pub fn needs_sync(&self) -> bool {
+		self.targets.iter().any(|target| target.needs_sync())
+	}
+}
+
+struct SyncPlan {
+	entries_to_translate: Vec<(String, String)>,
+	stale_keys: Vec<String>,
+}
+
+fn compute_sync_plan(
+	reference_data: &I18nData,
+	target_data: &I18nData,
+	changed_keys_since_last_hashing: &BTreeSet<String>,
+	mode: GenerationMode,
+) -> SyncPlan {
+	let reference_entries = &reference_data.walked_tree_map;
+	let entries_to_translate: Vec<(String, String)> = match mode {
+		GenerationMode::Regenerate => reference_entries.clone(),
+		GenerationMode::Sync => {
+			let target_keys: BTreeSet<&str> = target_data.walked_tree_map.iter().map(|(k, _)| k.as_str()).collect();
+
+			reference_entries
+				.iter()
+				.filter(|(key, _)| !target_keys.contains(key.as_str()) || changed_keys_since_last_hashing.contains(key))
+				.cloned()
+				.collect()
+		}
+	};
+	let stale_keys: Vec<String> = match mode {
+		GenerationMode::Regenerate => Vec::new(),
+		GenerationMode::Sync => {
+			let reference_keys: BTreeSet<&str> = reference_entries.iter().map(|(k, _)| k.as_str()).collect();
+
+			target_data
+				.walked_tree_map
+				.iter()
+				.filter(|(key, _)| !reference_keys.contains(key.as_str()))
+				.map(|(key, _)| key.clone())
+				.collect()
+		}
+	};
+
+	SyncPlan {
+		entries_to_translate,
+		stale_keys,
+	}
 }
 
 pub struct I18nGenerator;
@@ -34,27 +106,26 @@ impl I18nGenerator {
 		let reference_hashing = I18nHashing::from_i18n_data(&reference_data);
 		let mut hash_cache = I18nHashingCache::load_from(&options.hash_cache_path).await?;
 
-		info!(
+		debug!(
 			"Scanned {} total entries from {} dict",
 			reference_data.walked_tree_map.len(),
 			reference_i18n.language
 		);
 
+		let mut total_translated: usize = 0;
+
 		for target in generate_i18n_for {
 			let target_id = target_identifier(target);
-			let cached_hashing = hash_cache
-				.get(&target_id)
-				.cloned()
-				.unwrap_or_else(I18nHashing::empty);
+			let cached_hashing = hash_cache.get(&target_id).cloned().unwrap_or_else(I18nHashing::empty);
 			let changed_keys = cached_hashing.compute_changed_keys(&reference_hashing);
 
-			info!(
+			debug!(
 				"{} keys changed since {} was last synced",
 				changed_keys.len(),
 				target.language
 			);
 
-			translate_into_target(
+			total_translated += translate_into_target(
 				translator,
 				reference_i18n,
 				&reference_data,
@@ -69,7 +140,110 @@ impl I18nGenerator {
 			hash_cache.save_to(&options.hash_cache_path).await?;
 		}
 
+		info!(
+			"{mode} complete: {} target(s), {total_translated} entries translated",
+			generate_i18n_for.len()
+		);
+
 		Ok(())
+	}
+
+	/// Records the current reference hashes for each target into the hash
+	/// cache, treating existing target files as authoritatively in-sync. Only
+	/// reference keys that **also exist in the target file** are hashed —
+	/// keys missing from the target are left out so a follow-up `sync`
+	/// detects and translates them. The cache is loaded first so unrelated
+	/// entries (other configs sharing the same cache file, or other
+	/// namespaces' targets in the same file) are preserved; entries for the
+	/// targets passed in are replaced.
+	pub async fn baseline(
+		reference_i18n: &I18nDefinition,
+		generate_i18n_for: &[I18nDefinition],
+		options: &J18nOptions,
+	) -> J18nResult<usize> {
+		let reference_data = read_i18n_data(reference_i18n, &options.exclude_patterns).await?;
+		let mut hash_cache = I18nHashingCache::load_from(&options.hash_cache_path).await?;
+
+		debug!(
+			"Baselining {} target(s) against {} reference entries from {}",
+			generate_i18n_for.len(),
+			reference_data.walked_tree_map.len(),
+			reference_i18n.language,
+		);
+
+		for target in generate_i18n_for {
+			let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
+			let target_keys: BTreeSet<&str> = target_data
+				.walked_tree_map
+				.iter()
+				.map(|(key, _)| key.as_str())
+				.collect();
+			let mut hashing_for_target = I18nHashing::empty();
+
+			for (key, value) in &reference_data.walked_tree_map {
+				if target_keys.contains(key.as_str()) {
+					hashing_for_target
+						.json_key_to_hash_map
+						.insert(key.clone(), java_string_hashcode_hex(value));
+				}
+			}
+
+			debug!(
+				"Baselined {} ({}/{} reference keys present in target)",
+				target.language,
+				hashing_for_target.json_key_to_hash_map.len(),
+				reference_data.walked_tree_map.len(),
+			);
+			hash_cache.set(target_identifier(target), hashing_for_target);
+		}
+
+		hash_cache.save_to(&options.hash_cache_path).await?;
+
+		Ok(generate_i18n_for.len())
+	}
+
+	pub async fn check(
+		reference_i18n: &I18nDefinition,
+		generate_i18n_for: &[I18nDefinition],
+		options: &J18nOptions,
+	) -> J18nResult<CheckReport> {
+		let reference_data = read_i18n_data(reference_i18n, &options.exclude_patterns).await?;
+		let reference_hashing = I18nHashing::from_i18n_data(&reference_data);
+		let hash_cache = I18nHashingCache::load_from(&options.hash_cache_path).await?;
+		let reference_entries = reference_data.walked_tree_map.len();
+
+		debug!(
+			"Scanned {} total entries from {} dict",
+			reference_entries, reference_i18n.language
+		);
+
+		let mut targets = Vec::with_capacity(generate_i18n_for.len());
+
+		for target in generate_i18n_for {
+			let target_id = target_identifier(target);
+			let cached_hashing = hash_cache.get(&target_id).cloned().unwrap_or_else(I18nHashing::empty);
+			let changed_keys = cached_hashing.compute_changed_keys(&reference_hashing);
+			let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
+			let plan = compute_sync_plan(&reference_data, &target_data, &changed_keys, GenerationMode::Sync);
+
+			debug!(
+				"{}: {} key(s) need translation, {} stale key(s)",
+				target.language,
+				plan.entries_to_translate.len(),
+				plan.stale_keys.len()
+			);
+
+			targets.push(TargetCheckResult {
+				target: target.clone(),
+				missing_or_changed_keys: plan.entries_to_translate.into_iter().map(|(key, _)| key).collect(),
+				stale_keys: plan.stale_keys,
+			});
+		}
+
+		Ok(CheckReport {
+			reference_entries,
+			targets,
+		})
 	}
 }
 
@@ -82,37 +256,27 @@ async fn translate_into_target<T>(
 	target: &I18nDefinition,
 	mode: GenerationMode,
 	options: &J18nOptions,
-) -> J18nResult<()>
+) -> J18nResult<usize>
 where
 	T: I18nTranslator + ?Sized,
 {
 	let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
-	let reference_entries = &reference_data.walked_tree_map;
-	let entries_to_translate: Vec<(String, String)> = match mode {
-		GenerationMode::Regenerate => reference_entries.clone(),
-		GenerationMode::Sync => {
-			let target_keys: BTreeSet<&str> = target_data.walked_tree_map.iter().map(|(k, _)| k.as_str()).collect();
-
-			reference_entries
-				.iter()
-				.filter(|(key, _)| !target_keys.contains(key.as_str()) || changed_keys_since_last_hashing.contains(key))
-				.cloned()
-				.collect()
-		}
-	};
+	let plan = compute_sync_plan(reference_data, &target_data, changed_keys_since_last_hashing, mode);
+	let entries_to_translate = plan.entries_to_translate;
+	let entry_count = entries_to_translate.len();
 	let total_characters: usize = entries_to_translate.iter().map(|(_, value)| value.len()).sum();
 	let windowed_entries: Vec<Vec<(String, String)>> = entries_to_translate
 		.chunks(options.batch_size)
 		.map(|chunk| chunk.to_vec())
 		.collect();
 
-	info!(
-		"Translating {} entries ({} characters) to {} in a total of {} batches...",
-		entries_to_translate.len(),
-		total_characters,
-		target.language,
-		windowed_entries.len()
-	);
+	if entry_count > 0 {
+		info!(
+			"Translating {entry_count} entries ({total_characters} characters) to {} in a total of {} batches...",
+			target.language,
+			windowed_entries.len()
+		);
+	}
 
 	let total_batches = windowed_entries.len();
 	let translated_count = Arc::new(AtomicUsize::new(0));
@@ -136,7 +300,7 @@ where
 	let translated_batches: Vec<Vec<(String, String)>> =
 		translated_batches.into_iter().collect::<J18nResult<Vec<_>>>()?;
 
-	info!("Writing ({mode}) JSON to \"{}\"...", target.file.display());
+	debug!("Writing ({mode}) JSON to \"{}\"...", target.file.display());
 
 	let initial_json_dict: Map<String, Value> = match mode {
 		GenerationMode::Regenerate => reference_data.json_dict.clone(),
@@ -153,7 +317,7 @@ where
 	)
 	.await?;
 
-	Ok(())
+	Ok(entry_count)
 }
 
 async fn translate_batch<T>(
@@ -362,7 +526,9 @@ mod tests {
 		hashes.insert("b".to_string(), java_string_hashcode_hex("B"));
 		cache.set(
 			target_identifier(&target),
-			I18nHashing { json_key_to_hash_map: hashes },
+			I18nHashing {
+				json_key_to_hash_map: hashes,
+			},
 		);
 		cache.save_to(&dir.path().join(".hash-cache.json")).await.unwrap();
 
@@ -427,7 +593,9 @@ mod tests {
 		let target = definition_in(&dir, "pt");
 
 		fs::write(&reference.file, "{\n\t\"keep\": \"K\"\n}\n").await.unwrap();
-		fs::write(&target.file, r#"{"keep": "KK", "stale": "S"}"#).await.unwrap();
+		fs::write(&target.file, r#"{"keep": "KK", "stale": "S"}"#)
+			.await
+			.unwrap();
 
 		let translator = MockTranslator::default();
 
@@ -598,7 +766,10 @@ mod tests {
 
 		let written = fs::read_to_string(&target.file).await.unwrap();
 
-		assert!(written.contains("\n  \"a\""), "expected 2-space indent, got:\n{written}");
+		assert!(
+			written.contains("\n  \"a\""),
+			"expected 2-space indent, got:\n{written}"
+		);
 	}
 
 	#[tokio::test]
@@ -620,7 +791,9 @@ mod tests {
 		hashes.insert("b".to_string(), java_string_hashcode_hex("B"));
 		cache.set(
 			target_identifier(&target),
-			I18nHashing { json_key_to_hash_map: hashes },
+			I18nHashing {
+				json_key_to_hash_map: hashes,
+			},
 		);
 		cache.save_to(&dir.path().join(".hash-cache.json")).await.unwrap();
 
@@ -636,7 +809,10 @@ mod tests {
 
 		let written = fs::read_to_string(&target.file).await.unwrap();
 
-		assert!(written.contains("\n    \"a\""), "expected 4-space indent, got:\n{written}");
+		assert!(
+			written.contains("\n    \"a\""),
+			"expected 4-space indent, got:\n{written}"
+		);
 	}
 
 	#[tokio::test]
@@ -645,12 +821,9 @@ mod tests {
 		let reference = definition_in(&dir, "en");
 		let target = definition_in(&dir, "pt");
 
-		fs::write(
-			&reference.file,
-			r#"{"a":"A","b":"B","c":"C","d":"D","e":"E"}"#,
-		)
-		.await
-		.unwrap();
+		fs::write(&reference.file, r#"{"a":"A","b":"B","c":"C","d":"D","e":"E"}"#)
+			.await
+			.unwrap();
 
 		let translator = MockTranslator::default();
 		let mut options = default_options(&dir);
@@ -669,6 +842,238 @@ mod tests {
 
 		let captured = translator.captured.lock().unwrap();
 
-		assert_eq!(captured.len(), 3, "5 entries with batch_size=2 should produce 3 batches");
+		assert_eq!(
+			captured.len(),
+			3,
+			"5 entries with batch_size=2 should produce 3 batches"
+		);
+	}
+
+	#[tokio::test]
+	async fn baseline_writes_reference_hashes_for_each_target() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+		let es = definition_in(&dir, "es");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+		fs::write(&es.file, r#"{"a": "AAA", "b": "BBB"}"#).await.unwrap();
+
+		let count = I18nGenerator::baseline(&reference, &[pt.clone(), es.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		assert_eq!(count, 2);
+
+		let cache_path = dir.path().join(".hash-cache.json");
+		let cache = I18nHashingCache::load_from(&cache_path).await.unwrap();
+		let pt_hashing = cache.get(&target_identifier(&pt)).unwrap();
+		let es_hashing = cache.get(&target_identifier(&es)).unwrap();
+
+		assert_eq!(
+			pt_hashing.json_key_to_hash_map.get("a").unwrap(),
+			&java_string_hashcode_hex("A")
+		);
+		assert_eq!(
+			pt_hashing.json_key_to_hash_map.get("b").unwrap(),
+			&java_string_hashcode_hex("B")
+		);
+		assert_eq!(
+			es_hashing.json_key_to_hash_map.get("a").unwrap(),
+			&java_string_hashcode_hex("A")
+		);
+	}
+
+	#[tokio::test]
+	async fn baseline_skips_reference_keys_that_are_missing_from_target() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B", "c": "C"}"#)
+			.await
+			.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		let cache = I18nHashingCache::load_from(&dir.path().join(".hash-cache.json"))
+			.await
+			.unwrap();
+		let pt_hashing = cache.get(&target_identifier(&pt)).unwrap();
+
+		assert_eq!(pt_hashing.json_key_to_hash_map.len(), 2);
+		assert!(pt_hashing.json_key_to_hash_map.contains_key("a"));
+		assert!(pt_hashing.json_key_to_hash_map.contains_key("b"));
+		assert!(
+			!pt_hashing.json_key_to_hash_map.contains_key("c"),
+			"baseline must NOT write a hash for a key that is missing from the target",
+		);
+	}
+
+	#[tokio::test]
+	async fn baseline_writes_empty_hashing_when_target_file_does_not_exist() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A"}"#).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		let cache = I18nHashingCache::load_from(&dir.path().join(".hash-cache.json"))
+			.await
+			.unwrap();
+		let pt_hashing = cache.get(&target_identifier(&pt)).unwrap();
+
+		assert!(
+			pt_hashing.json_key_to_hash_map.is_empty(),
+			"baseline against a non-existent target file should produce an empty hashing so sync translates everything",
+		);
+	}
+
+	#[tokio::test]
+	async fn baseline_merges_with_existing_cache_overriding_target_match_and_preserving_others() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A-NEW"}"#).await.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA"}"#).await.unwrap();
+
+		let mut cache = I18nHashingCache::empty();
+		let mut stale_pt_hashes = HashMap::new();
+
+		stale_pt_hashes.insert("a".to_string(), java_string_hashcode_hex("A-OLD"));
+		cache.set(
+			target_identifier(&pt),
+			I18nHashing {
+				json_key_to_hash_map: stale_pt_hashes,
+			},
+		);
+		let mut other_hashes = HashMap::new();
+
+		other_hashes.insert("x".to_string(), java_string_hashcode_hex("X"));
+		cache.set(
+			"unrelated/zh.json@Mandarin".to_string(),
+			I18nHashing {
+				json_key_to_hash_map: other_hashes,
+			},
+		);
+		cache.save_to(&dir.path().join(".hash-cache.json")).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		let reloaded = I18nHashingCache::load_from(&dir.path().join(".hash-cache.json"))
+			.await
+			.unwrap();
+		let pt_hashing = reloaded.get(&target_identifier(&pt)).unwrap();
+
+		assert_eq!(
+			pt_hashing.json_key_to_hash_map.get("a").unwrap(),
+			&java_string_hashcode_hex("A-NEW"),
+			"baseline must override the stale hash for the target it touches",
+		);
+
+		let unrelated = reloaded.get("unrelated/zh.json@Mandarin").unwrap();
+
+		assert_eq!(
+			unrelated.json_key_to_hash_map.get("x").unwrap(),
+			&java_string_hashcode_hex("X"),
+			"baseline must preserve cache entries for targets it does not touch",
+		);
+	}
+
+	#[tokio::test]
+	async fn sync_after_baseline_translates_only_keys_missing_from_target() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B", "c": "C"}"#)
+			.await
+			.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(
+			&translator,
+			&reference,
+			&[pt.clone()],
+			GenerationMode::Sync,
+			&default_options(&dir),
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(
+			translator.captured_inputs(),
+			vec!["C".to_string()],
+			"sync after partial baseline must only translate the keys that were missing from the target",
+		);
+	}
+
+	#[tokio::test]
+	async fn check_after_baseline_reports_no_changes_when_target_keys_match_reference() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+		let report = I18nGenerator::check(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		assert_eq!(report.targets.len(), 1);
+		assert!(!report.targets[0].needs_sync());
+	}
+
+	#[tokio::test]
+	async fn sync_after_baseline_does_not_call_translator_for_unchanged_keys() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+		fs::write(&pt.file, r#"{"a": "AA", "b": "BB"}"#).await.unwrap();
+
+		I18nGenerator::baseline(&reference, &[pt.clone()], &default_options(&dir))
+			.await
+			.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(
+			&translator,
+			&reference,
+			&[pt.clone()],
+			GenerationMode::Sync,
+			&default_options(&dir),
+		)
+		.await
+		.unwrap();
+
+		assert!(
+			translator.captured_inputs().is_empty(),
+			"baseline should leave the cache fully matching the reference; no translation calls expected, got {:?}",
+			translator.captured_inputs()
+		);
 	}
 }

@@ -90,7 +90,11 @@ fn parse_component(segment: &str) -> ComponentMatcher {
 					parts.push(GlobPart::Literal(std::mem::take(&mut buffer)));
 				}
 
-				parts.push(if character == '*' { GlobPart::Star } else { GlobPart::Question });
+				parts.push(if character == '*' {
+					GlobPart::Star
+				} else {
+					GlobPart::Question
+				});
 			}
 			other => buffer.push(other),
 		}
@@ -243,10 +247,7 @@ mod tests {
 
 	#[test]
 	fn key_matches_any_returns_true_when_any_pattern_matches() {
-		let patterns = vec![
-			PathPattern::parse("a").unwrap(),
-			PathPattern::parse("b.**").unwrap(),
-		];
+		let patterns = vec![PathPattern::parse("a").unwrap(), PathPattern::parse("b.**").unwrap()];
 
 		assert!(key_matches_any("a", &patterns));
 		assert!(key_matches_any("b.x.y", &patterns));

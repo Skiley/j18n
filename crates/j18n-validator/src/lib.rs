@@ -2,7 +2,7 @@ use j18n_core::{I18nData, I18nDefinition, J18nError, J18nResult, PathPattern};
 use j18n_io::read_i18n_data;
 use regex::Regex;
 use std::collections::HashMap;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 pub struct TranslationValidator;
 
@@ -16,7 +16,7 @@ impl TranslationValidator {
 		let reference_data = read_i18n_data(reference_i18n, exclude_patterns).await?;
 
 		for generated in generated_i18ns {
-			info!(
+			debug!(
 				"Validating {} ({}) with {} ({})...",
 				generated.language,
 				generated.file.display(),
@@ -130,12 +130,8 @@ mod tests {
 
 	#[test]
 	fn validate_translation_errors_when_counts_differ() {
-		let err = TranslationValidator::validate_translation(
-			&["a".into(), "b".into()],
-			&["A".into()],
-			&handlebars(),
-		)
-		.unwrap_err();
+		let err = TranslationValidator::validate_translation(&["a".into(), "b".into()], &["A".into()], &handlebars())
+			.unwrap_err();
 
 		assert!(matches!(err, J18nError::Validation(_)));
 	}
@@ -254,10 +250,7 @@ mod tests {
 
 	#[test]
 	fn find_interpolations_supports_multiple_patterns() {
-		let patterns = vec![
-			Regex::new(r"\{\{(.+?)\}\}").unwrap(),
-			Regex::new(r"%\w+%").unwrap(),
-		];
+		let patterns = vec![Regex::new(r"\{\{(.+?)\}\}").unwrap(), Regex::new(r"%\w+%").unwrap()];
 
 		let interpolations = find_interpolations("Hi {{name}} %SITE%", &patterns);
 

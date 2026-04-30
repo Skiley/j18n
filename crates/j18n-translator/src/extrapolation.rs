@@ -182,10 +182,7 @@ mod tests {
 
 	#[test]
 	fn create_extrapolated_value_supports_multiple_pattern_styles() {
-		let patterns = vec![
-			Regex::new(r"\{\{(.+?)\}\}").unwrap(),
-			Regex::new(r"%\w+%").unwrap(),
-		];
+		let patterns = vec![Regex::new(r"\{\{(.+?)\}\}").unwrap(), Regex::new(r"%\w+%").unwrap()];
 
 		let value = create_extrapolated_value("Hi {{name}}, welcome %SITE%", &patterns);
 
@@ -252,10 +249,7 @@ mod tests {
 
 	#[test]
 	fn restore_extrapolated_values_returns_in_order() {
-		let extrapolated = create_extrapolated_values(
-			&["{{a}}".to_string(), "{{b}}".to_string()],
-			&handlebars(),
-		);
+		let extrapolated = create_extrapolated_values(&["{{a}}".to_string(), "{{b}}".to_string()], &handlebars());
 		let translated = vec!["[0]".to_string(), "[0]".to_string()];
 		let restored = restore_extrapolated_values(&extrapolated, &translated).unwrap();
 
@@ -264,8 +258,7 @@ mod tests {
 
 	#[test]
 	fn compile_interpolation_patterns_returns_regexes() {
-		let compiled =
-			compile_interpolation_patterns(&[r"\{\{(.+?)\}\}".to_string(), r"%\w+%".to_string()]).unwrap();
+		let compiled = compile_interpolation_patterns(&[r"\{\{(.+?)\}\}".to_string(), r"%\w+%".to_string()]).unwrap();
 
 		assert_eq!(compiled.len(), 2);
 	}

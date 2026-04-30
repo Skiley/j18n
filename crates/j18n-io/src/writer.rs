@@ -177,7 +177,9 @@ mod tests {
 		let reference = parse(r#"{"a": "x"}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"  ", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"  ", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 
@@ -213,7 +215,9 @@ mod tests {
 		let reference = parse(r#"{"keep": "K"}"#);
 		let initial = parse(r#"{"keep": "K", "stale": "S"}"#);
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let parsed: Map<String, Value> = serde_json::from_str(&written).unwrap();
@@ -229,7 +233,9 @@ mod tests {
 		let reference = parse(r#"{"section": {"keep": "K"}}"#);
 		let initial = parse(r#"{"section": {"keep": "K", "stale": "S"}}"#);
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let parsed: Map<String, Value> = serde_json::from_str(&written).unwrap();
@@ -245,7 +251,9 @@ mod tests {
 		let reference = parse(r#"{"zebra": "Z", "apple": "A", "mango": "M"}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let apple_pos = written.find("\"apple\"").unwrap();
@@ -263,7 +271,9 @@ mod tests {
 		let reference = parse(r#"{"0":"a","1":"b","10":"c","11":"d","2":"e"}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let positions: Vec<usize> = ["\"0\"", "\"1\"", "\"2\"", "\"10\"", "\"11\""]
@@ -283,7 +293,9 @@ mod tests {
 		let reference = parse(r#"{"types": "T", "typeSelection": "S"}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let type_selection_pos = written.find("\"typeSelection\"").unwrap();
@@ -299,7 +311,9 @@ mod tests {
 		let reference = parse(r#"{"section": {"zebra": "Z", "apple": "A"}}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		let written = fs::read_to_string(&definition.file).await.unwrap();
 		let apple_pos = written.find("\"apple\"").unwrap();
@@ -320,7 +334,9 @@ mod tests {
 		let reference = parse(r#"{"a": "x"}"#);
 		let initial = reference.clone();
 
-		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[]).await.unwrap();
+		write_i18n_tree_map(&definition, b"\t", &reference, initial, &[])
+			.await
+			.unwrap();
 
 		assert!(definition.file.exists());
 	}

@@ -22,6 +22,24 @@ pub enum Command {
 
 	#[command(about = "Translate every entry in the reference, replacing existing translations.")]
 	Regenerate(CommandArgs),
+
+	#[command(
+		name = "check",
+		about = "Report whether `sync` would translate or prune anything; exit non-zero if so."
+	)]
+	Check(CommandArgs),
+
+	#[command(
+		name = "baseline",
+		about = "Record current reference hashes for each target without translating; useful when adopting j18n on a project with pre-existing translations so a follow-up `sync` doesn't re-translate everything."
+	)]
+	Baseline(CommandArgs),
+
+	#[command(
+		name = "install-git-hook",
+		about = "Install a `pre-commit` hook in the current repo that runs `j18n check <CONFIGS>...`."
+	)]
+	InstallGitHook(CommandArgs),
 }
 
 #[derive(Args, Debug)]

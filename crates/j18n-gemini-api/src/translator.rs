@@ -1,6 +1,4 @@
-use crate::model::{
-	GeminiContent, GeminiPart, GenerateContentRequest, GenerateContentResponse, GenerationConfig,
-};
+use crate::model::{GeminiContent, GeminiPart, GenerateContentRequest, GenerateContentResponse, GenerationConfig};
 use async_trait::async_trait;
 use j18n_core::{J18nError, J18nResult};
 use j18n_translator::I18nTranslator;
@@ -132,9 +130,7 @@ impl<T: GeminiTransport> GeminiApiI18nTranslator<T> {
 			.collect();
 		let request = GenerateContentRequest {
 			contents,
-			generation_config: Some(GenerationConfig {
-				temperature: Some(1.0),
-			}),
+			generation_config: Some(GenerationConfig { temperature: Some(1.0) }),
 			system_instruction: Some(GeminiContent {
 				parts: vec![GeminiPart {
 					text: SYSTEM_INSTRUCTIONS.to_string(),
@@ -447,10 +443,8 @@ mod tests {
 	#[tokio::test]
 	async fn additional_prompts_are_injected_between_placeholder_warnings() {
 		let (transport, captured) = MockTransport::ok(r#"["X"]"#);
-		let translator = GeminiApiI18nTranslator::with_transport(transport).with_additional_prompts(vec![
-			"INJECTED-CONTEXT-A".to_string(),
-			"INJECTED-CONTEXT-B".to_string(),
-		]);
+		let translator = GeminiApiI18nTranslator::with_transport(transport)
+			.with_additional_prompts(vec!["INJECTED-CONTEXT-A".to_string(), "INJECTED-CONTEXT-B".to_string()]);
 
 		translator
 			.translate_values(ENGLISH, PORTUGUESE, vec!["x".into()])

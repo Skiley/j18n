@@ -1,13 +1,73 @@
 use anyhow::{Context, Result};
 use j18n_core::PathPattern;
 use j18n_translator::compile_interpolation_patterns;
+use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct DefinitionEntry {
 	pub file: String,
 	pub language: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NamespacesConfig {
+	List(Vec<String>),
+	Wildcard,
+}
+
+impl<'de> Deserialize<'de> for NamespacesConfig {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		struct NamespacesVisitor;
+
+		impl<'de> Visitor<'de> for NamespacesVisitor {
+			type Value = NamespacesConfig;
+
+			fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+				formatter.write_str("the string \"*\" or an array of namespace names")
+			}
+
+			fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+			where
+				E: de::Error,
+			{
+				if value == "*" {
+					Ok(NamespacesConfig::Wildcard)
+				} else {
+					Err(E::custom(format!(
+						"expected \"*\" for wildcard namespace discovery, got \"{value}\""
+					)))
+				}
+			}
+
+			fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+			where
+				E: de::Error,
+			{
+				self.visit_str(&value)
+			}
+
+			fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+			where
+				A: de::SeqAccess<'de>,
+			{
+				let mut names: Vec<String> = Vec::new();
+
+				while let Some(name) = seq.next_element::<String>()? {
+					names.push(name);
+				}
+
+				Ok(NamespacesConfig::List(names))
+			}
+		}
+
+		deserializer.deserialize_any(NamespacesVisitor)
+	}
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +89,9 @@ pub struct I18nToolConfig {
 
 	#[serde(rename = "interpolationPatterns")]
 	pub interpolation_patterns: Vec<String>,
+
+	#[serde(rename = "namespaces", default)]
+	pub namespaces: Option<NamespacesConfig>,
 
 	#[serde(rename = "parallelBatches")]
 	pub parallel_batches: usize,
@@ -350,5 +413,92 @@ mod tests {
 		let config = load_config(&path).unwrap();
 
 		assert_eq!(config.batch_size, 50);
+	}
+
+	#[test]
+	fn namespaces_field_defaults_to_none_when_omitted() {
+		let dir = TempDir::new().unwrap();
+		let path = write_config(&dir, "a.json", full_config_json());
+
+		let config = load_config(&path).unwrap();
+
+		assert!(config.namespaces.is_none());
+	}
+
+	#[test]
+	fn namespaces_field_parses_explicit_list() {
+		let dir = TempDir::new().unwrap();
+		let path = write_config(
+			&dir,
+			"a.json",
+			r#"{
+				"additionalPrompts": [],
+				"batchSize": 50,
+				"excludePatterns": [],
+				"generateI18nFor": [{ "file": "locales/pt/{namespace}.json", "language": "Portuguese" }],
+				"interpolationPatterns": [],
+				"namespaces": ["common", "auth", "checkout"],
+				"parallelBatches": 3,
+				"referenceI18n": { "file": "locales/en/{namespace}.json", "language": "English" },
+				"translator": "claude-code"
+			}"#,
+		);
+
+		let config = load_config(&path).unwrap();
+
+		match config.namespaces {
+			Some(NamespacesConfig::List(names)) => {
+				assert_eq!(names, vec!["common".to_string(), "auth".to_string(), "checkout".to_string()]);
+			}
+			other => panic!("expected explicit list, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn namespaces_field_parses_wildcard_string() {
+		let dir = TempDir::new().unwrap();
+		let path = write_config(
+			&dir,
+			"a.json",
+			r#"{
+				"additionalPrompts": [],
+				"batchSize": 50,
+				"excludePatterns": [],
+				"generateI18nFor": [{ "file": "locales/pt/{namespace}.json", "language": "Portuguese" }],
+				"interpolationPatterns": [],
+				"namespaces": "*",
+				"parallelBatches": 3,
+				"referenceI18n": { "file": "locales/en/{namespace}.json", "language": "English" },
+				"translator": "claude-code"
+			}"#,
+		);
+
+		let config = load_config(&path).unwrap();
+
+		assert!(matches!(config.namespaces, Some(NamespacesConfig::Wildcard)));
+	}
+
+	#[test]
+	fn namespaces_field_rejects_unknown_string_value() {
+		let dir = TempDir::new().unwrap();
+		let path = write_config(
+			&dir,
+			"a.json",
+			r#"{
+				"additionalPrompts": [],
+				"batchSize": 50,
+				"excludePatterns": [],
+				"generateI18nFor": [],
+				"interpolationPatterns": [],
+				"namespaces": "auto",
+				"parallelBatches": 3,
+				"referenceI18n": { "file": "locales/en.json", "language": "English" },
+				"translator": "claude-code"
+			}"#,
+		);
+
+		let err = load_config(&path).unwrap_err();
+
+		assert!(format!("{err:#}").contains("\"*\""));
 	}
 }

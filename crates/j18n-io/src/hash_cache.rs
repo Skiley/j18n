@@ -61,9 +61,7 @@ impl I18nHashingCache {
 			})?;
 		let by_target = parsed
 			.into_iter()
-			.map(|(target_id, json_key_to_hash_map)| {
-				(target_id, I18nHashing { json_key_to_hash_map })
-			})
+			.map(|(target_id, json_key_to_hash_map)| (target_id, I18nHashing { json_key_to_hash_map }))
 			.collect();
 
 		Ok(Self { by_target })
@@ -85,10 +83,7 @@ impl I18nHashingCache {
 			let mut inner = Map::new();
 
 			for key in sorted_keys {
-				inner.insert(
-					key.clone(),
-					Value::String(hashing.json_key_to_hash_map[key].clone()),
-				);
+				inner.insert(key.clone(), Value::String(hashing.json_key_to_hash_map[key].clone()));
 			}
 
 			top.insert(target_id.clone(), Value::Object(inner));
@@ -111,10 +106,12 @@ impl I18nHashingCache {
 			source,
 		})?;
 
-		file.write_all(serialized.as_bytes()).await.map_err(|source| J18nError::Io {
-			path: path.to_path_buf(),
-			source,
-		})?;
+		file.write_all(serialized.as_bytes())
+			.await
+			.map_err(|source| J18nError::Io {
+				path: path.to_path_buf(),
+				source,
+			})?;
 		file.write_all(b"\n").await.map_err(|source| J18nError::Io {
 			path: path.to_path_buf(),
 			source,
@@ -148,7 +145,9 @@ mod tests {
 			map.insert(key.to_string(), value.to_string());
 		}
 
-		I18nHashing { json_key_to_hash_map: map }
+		I18nHashing {
+			json_key_to_hash_map: map,
+		}
 	}
 
 	#[tokio::test]

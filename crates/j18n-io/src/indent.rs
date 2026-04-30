@@ -93,9 +93,6 @@ mod tests {
 
 		tokio::fs::write(&path, "{\n  \"a\": \"x\"\n}\n").await.unwrap();
 
-		assert_eq!(
-			detect_indentation(&path).await.unwrap(),
-			Some("  ".to_string())
-		);
+		assert_eq!(detect_indentation(&path).await.unwrap(), Some("  ".to_string()));
 	}
 }

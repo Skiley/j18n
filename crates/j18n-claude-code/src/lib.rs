@@ -305,10 +305,8 @@ mod tests {
 	#[tokio::test]
 	async fn additional_prompts_are_injected_between_placeholder_warnings() {
 		let (executor, captured) = MockExecutor::ok("X");
-		let translator = ClaudeCodeBasedI18nTranslator::with_executor(executor).with_additional_prompts(vec![
-			"INJECTED-CONTEXT-A".to_string(),
-			"INJECTED-CONTEXT-B".to_string(),
-		]);
+		let translator = ClaudeCodeBasedI18nTranslator::with_executor(executor)
+			.with_additional_prompts(vec!["INJECTED-CONTEXT-A".to_string(), "INJECTED-CONTEXT-B".to_string()]);
 
 		translator
 			.translate_values(ENGLISH, PORTUGUESE, vec!["x".into()])

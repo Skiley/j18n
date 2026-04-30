@@ -17,11 +17,10 @@ pub async fn read_i18n_data(definition: &I18nDefinition, exclude_patterns: &[Pat
 		path: path.clone(),
 		source,
 	})?;
-	let parsed_dict: Map<String, Value> =
-		serde_json::from_slice(&raw_bytes).map_err(|source| J18nError::Json {
-			path: path.clone(),
-			source,
-		})?;
+	let parsed_dict: Map<String, Value> = serde_json::from_slice(&raw_bytes).map_err(|source| J18nError::Json {
+		path: path.clone(),
+		source,
+	})?;
 	let json_dict = filter_excluded(&parsed_dict, "", exclude_patterns);
 	let walked_tree_map = walk_json_tree_to_map(&json_dict);
 
@@ -93,9 +92,7 @@ mod tests {
 		let dir = TempDir::new().unwrap();
 		let definition = definition_in(&dir, "en");
 
-		fs::write(&definition.file, r#"{"a": "1", "b": "2"}"#)
-			.await
-			.unwrap();
+		fs::write(&definition.file, r#"{"a": "1", "b": "2"}"#).await.unwrap();
 
 		let data = read_i18n_data(&definition, &[]).await.unwrap();
 
@@ -110,12 +107,9 @@ mod tests {
 		let dir = TempDir::new().unwrap();
 		let definition = definition_in(&dir, "en");
 
-		fs::write(
-			&definition.file,
-			r#"{"section": {"key": "value"}, "other": "x"}"#,
-		)
-		.await
-		.unwrap();
+		fs::write(&definition.file, r#"{"section": {"key": "value"}, "other": "x"}"#)
+			.await
+			.unwrap();
 
 		let data = read_i18n_data(&definition, &[]).await.unwrap();
 
@@ -146,12 +140,9 @@ mod tests {
 		let dir = TempDir::new().unwrap();
 		let definition = definition_in(&dir, "en");
 
-		fs::write(
-			&definition.file,
-			r#"{"sample": {"a": "X", "b": "Y"}, "real": "Z"}"#,
-		)
-		.await
-		.unwrap();
+		fs::write(&definition.file, r#"{"sample": {"a": "X", "b": "Y"}, "real": "Z"}"#)
+			.await
+			.unwrap();
 
 		let patterns = vec![PathPattern::parse("sample.**").unwrap()];
 		let data = read_i18n_data(&definition, &patterns).await.unwrap();

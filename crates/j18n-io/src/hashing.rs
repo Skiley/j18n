@@ -91,10 +91,7 @@ mod tests {
 
 	#[test]
 	fn matches_kotlin_hash_cache_values_for_real_strings() {
-		assert_eq!(
-			java_string_hashcode_hex("This account no longer exists."),
-			"10f79085"
-		);
+		assert_eq!(java_string_hashcode_hex("This account no longer exists."), "10f79085");
 		assert_eq!(java_string_hashcode_hex("Delete my account"), "-8a0ced2");
 	}
 
@@ -120,8 +117,12 @@ mod tests {
 		b.insert("modified".to_string(), "new".to_string());
 		b.insert("only_in_b".to_string(), "y".to_string());
 
-		let hashing_a = I18nHashing { json_key_to_hash_map: a };
-		let hashing_b = I18nHashing { json_key_to_hash_map: b };
+		let hashing_a = I18nHashing {
+			json_key_to_hash_map: a,
+		};
+		let hashing_b = I18nHashing {
+			json_key_to_hash_map: b,
+		};
 		let changed = hashing_a.compute_changed_keys(&hashing_b);
 
 		assert!(changed.contains("modified"));
@@ -139,7 +140,9 @@ mod tests {
 		let hashing_a = I18nHashing {
 			json_key_to_hash_map: map.clone(),
 		};
-		let hashing_b = I18nHashing { json_key_to_hash_map: map };
+		let hashing_b = I18nHashing {
+			json_key_to_hash_map: map,
+		};
 
 		assert!(hashing_a.compute_changed_keys(&hashing_b).is_empty());
 	}
