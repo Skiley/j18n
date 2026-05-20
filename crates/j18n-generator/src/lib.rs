@@ -112,12 +112,19 @@ impl I18nGenerator {
 			reference_i18n.language
 		);
 
-		let mut total_translated: usize = 0;
+		// Targets (languages) are processed concurrently. The hash cache is a
+		// single shared file rewritten in place, so saves are serialized behind
+		// a lock while the slow translation work runs fully in parallel.
+		let save_lock = tokio::sync::Mutex::new(());
+		let store = &store;
+		let reference_data = &reference_data;
+		let reference_hashing = &reference_hashing;
+		let save_lock = &save_lock;
 
-		for target in generate_i18n_for {
+		let per_target: Vec<J18nResult<usize>> = stream::iter(generate_i18n_for.iter().map(|target| async move {
 			let target_id = target_identifier(target);
 			let cached_hashing = store.load(&target_id).await?;
-			let changed_keys = cached_hashing.compute_changed_keys(&reference_hashing);
+			let changed_keys = cached_hashing.compute_changed_keys(reference_hashing);
 
 			debug!(
 				"{} keys changed since {} was last synced",
@@ -125,10 +132,10 @@ impl I18nGenerator {
 				target.language
 			);
 
-			total_translated += translate_into_target(
+			let translated = translate_into_target(
 				translator,
 				reference_i18n,
-				&reference_data,
+				reference_data,
 				&changed_keys,
 				target,
 				mode,
@@ -136,7 +143,22 @@ impl I18nGenerator {
 			)
 			.await?;
 
-			store.save(&target_id, &reference_hashing).await?;
+			{
+				let _guard = save_lock.lock().await;
+
+				store.save(&target_id, reference_hashing).await?;
+			}
+
+			Ok(translated)
+		}))
+		.buffer_unordered(generate_i18n_for.len().max(1))
+		.collect()
+		.await;
+
+		let mut total_translated: usize = 0;
+
+		for result in per_target {
+			total_translated += result?;
 		}
 
 		info!(
@@ -214,27 +236,42 @@ impl I18nGenerator {
 			reference_entries, reference_i18n.language
 		);
 
+		// Targets (languages) are checked concurrently. Every per-target step is
+		// read-only (cache load + target file read), so no locking is needed;
+		// `buffered` preserves the input ordering of the results.
+		let store = &store;
+		let reference_data = &reference_data;
+		let reference_hashing = &reference_hashing;
+
+		let target_results: Vec<J18nResult<TargetCheckResult>> =
+			stream::iter(generate_i18n_for.iter().map(|target| async move {
+				let target_id = target_identifier(target);
+				let cached_hashing = store.load(&target_id).await?;
+				let changed_keys = cached_hashing.compute_changed_keys(reference_hashing);
+				let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
+				let plan = compute_sync_plan(reference_data, &target_data, &changed_keys, GenerationMode::Sync);
+
+				debug!(
+					"{}: {} key(s) need translation, {} stale key(s)",
+					target.language,
+					plan.entries_to_translate.len(),
+					plan.stale_keys.len()
+				);
+
+				Ok(TargetCheckResult {
+					target: target.clone(),
+					missing_or_changed_keys: plan.entries_to_translate.into_iter().map(|(key, _)| key).collect(),
+					stale_keys: plan.stale_keys,
+				})
+			}))
+			.buffered(generate_i18n_for.len().max(1))
+			.collect()
+			.await;
+
 		let mut targets = Vec::with_capacity(generate_i18n_for.len());
 
-		for target in generate_i18n_for {
-			let target_id = target_identifier(target);
-			let cached_hashing = store.load(&target_id).await?;
-			let changed_keys = cached_hashing.compute_changed_keys(&reference_hashing);
-			let target_data = read_i18n_data(target, &options.exclude_patterns).await?;
-			let plan = compute_sync_plan(&reference_data, &target_data, &changed_keys, GenerationMode::Sync);
-
-			debug!(
-				"{}: {} key(s) need translation, {} stale key(s)",
-				target.language,
-				plan.entries_to_translate.len(),
-				plan.stale_keys.len()
-			);
-
-			targets.push(TargetCheckResult {
-				target: target.clone(),
-				missing_or_changed_keys: plan.entries_to_translate.into_iter().map(|(key, _)| key).collect(),
-				stale_keys: plan.stale_keys,
-			});
+		for result in target_results {
+			targets.push(result?);
 		}
 
 		Ok(CheckReport {
@@ -538,6 +575,49 @@ mod tests {
 
 		inputs.sort();
 		assert_eq!(inputs, vec!["A".to_string(), "B".to_string()]);
+	}
+
+	#[tokio::test]
+	async fn sync_with_multiple_targets_writes_every_file_and_cache_section() {
+		let dir = TempDir::new().unwrap();
+		let reference = definition_in(&dir, "en");
+		let pt = definition_in(&dir, "pt");
+		let es = definition_in(&dir, "es");
+		let fr = definition_in(&dir, "fr");
+
+		fs::write(&reference.file, r#"{"a": "A", "b": "B"}"#).await.unwrap();
+
+		let translator = MockTranslator::default();
+
+		I18nGenerator::execute(
+			&translator,
+			&reference,
+			&[pt.clone(), es.clone(), fr.clone()],
+			GenerationMode::Sync,
+			&default_options(&dir),
+		)
+		.await
+		.unwrap();
+
+		// Every target file is written with its own translations, proving the
+		// targets ran concurrently without clobbering each other's output.
+		for target in [&pt, &es, &fr] {
+			let written = read_json(&target.file).await;
+
+			assert_eq!(written["a"], format!("[{}]A", target.language));
+			assert_eq!(written["b"], format!("[{}]B", target.language));
+		}
+
+		// Concurrent saves to the single shared cache file must not corrupt or
+		// drop any target's section.
+		let store = I18nHashingStore::at(&default_options(&dir).hash_cache_location);
+
+		for target in [&pt, &es, &fr] {
+			let hashing = store.load(&target_identifier(target)).await.unwrap();
+
+			assert_eq!(hashing.json_key_to_hash_map.get("a").unwrap(), &content_hash_hex("A"));
+			assert_eq!(hashing.json_key_to_hash_map.get("b").unwrap(), &content_hash_hex("B"));
+		}
 	}
 
 	#[tokio::test]
