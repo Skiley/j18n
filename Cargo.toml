@@ -17,6 +17,7 @@ version = "0.1.0"
 rust-version = "1.94.1"
 edition = "2021"
 license = "MIT"
+publish = false
 repository = "https://github.com/Skiley/j18n"
 homepage = "https://github.com/Skiley/j18n"
 
