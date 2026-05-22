@@ -50,14 +50,20 @@
 			]
 		},
 		"install": {
-			"description": "Copies the built binary to .local/bin",
+			"description": "Copies the built binary to .local/bin as \"j18nd\"",
 			"commands": [
 				{
 					"if": "{{ RUN.os == 'windows' }}",
-					"then": "{{ define(executable, 'j18n.exe') }}",
-					"else": "{{ define(executable, 'j18n') }}"
+					"then": [
+						"{{ define(executable, 'j18n.exe') }}",
+						"{{ define(installed, 'j18nd.exe') }}"
+					],
+					"else": [
+						"{{ define(executable, 'j18n') }}",
+						"{{ define(installed, 'j18nd') }}"
+					]
 				},
-				"cp {{ ENV.CARGO_TARGET_DIR }}/debug/{{ VARS.executable }} ~/.local/bin/{{ VARS.executable }}"
+				"cp {{ ENV.CARGO_TARGET_DIR }}/debug/{{ VARS.executable }} ~/.local/bin/{{ VARS.installed }}"
 			],
 			"detach": true,
 			"forceShell": "sh",
