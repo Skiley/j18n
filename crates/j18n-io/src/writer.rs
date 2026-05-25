@@ -3,7 +3,6 @@ use j18n_core::{I18nDefinition, J18nError, J18nResult};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 
 pub async fn write_i18n_tree_map(
 	definition: &I18nDefinition,
@@ -22,10 +21,12 @@ pub async fn write_i18n_tree_map(
 
 	let cleaned_json_dict = remove_keys_absent_from_reference_dict(reference_json_dict, &translated_json_dict);
 	let sorted_json_dict = sort_object_recursively(cleaned_json_dict);
-	let serialized = serialize_pretty(&sorted_json_dict, indent).map_err(|source| J18nError::Json {
+	let mut serialized = serialize_pretty(&sorted_json_dict, indent).map_err(|source| J18nError::Json {
 		path: definition.file.clone(),
 		source,
 	})?;
+
+	serialized.push('\n');
 
 	if let Some(parent) = definition.file.parent() {
 		fs::create_dir_all(parent).await.map_err(|source| J18nError::Io {
@@ -34,25 +35,15 @@ pub async fn write_i18n_tree_map(
 		})?;
 	}
 
-	let mut file = fs::File::create(&definition.file)
+	// `fs::write` opens, writes, and closes in one shot; `tokio::fs::File` does
+	// not flush on drop, so a `File` + `write_all` without an explicit flush can
+	// leave a truncated/empty file on Linux.
+	fs::write(&definition.file, serialized.as_bytes())
 		.await
 		.map_err(|source| J18nError::Io {
 			path: definition.file.clone(),
 			source,
-		})?;
-
-	file.write_all(serialized.as_bytes())
-		.await
-		.map_err(|source| J18nError::Io {
-			path: definition.file.clone(),
-			source,
-		})?;
-	file.write_all(b"\n").await.map_err(|source| J18nError::Io {
-		path: definition.file.clone(),
-		source,
-	})?;
-
-	Ok(())
+		})
 }
 
 /// Writes a translated Markdown/MDX document verbatim to the target file,
@@ -70,26 +61,22 @@ pub async fn write_markdown_file(definition: &I18nDefinition, body: &str) -> J18
 		}
 	}
 
-	let mut file = fs::File::create(&definition.file)
+	let mut contents = body.to_string();
+
+	if !contents.ends_with('\n') {
+		contents.push('\n');
+	}
+
+	// `fs::write` opens, writes, and closes in one shot. We avoid `fs::File` +
+	// `write_all` here because `tokio::fs::File` does not flush on drop, so
+	// buffered bytes could be lost without an explicit `flush().await` (this
+	// manifested as truncated/empty files on Linux while passing on Windows).
+	fs::write(&definition.file, contents.as_bytes())
 		.await
 		.map_err(|source| J18nError::Io {
 			path: definition.file.clone(),
 			source,
-		})?;
-
-	file.write_all(body.as_bytes()).await.map_err(|source| J18nError::Io {
-		path: definition.file.clone(),
-		source,
-	})?;
-
-	if !body.ends_with('\n') {
-		file.write_all(b"\n").await.map_err(|source| J18nError::Io {
-			path: definition.file.clone(),
-			source,
-		})?;
-	}
-
-	Ok(())
+		})
 }
 
 fn change_i18n_property(mut json: Map<String, Value>, key_dot_separated: &str, value: &str) -> Map<String, Value> {
