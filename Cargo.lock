@@ -592,7 +592,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "j18n-claude-code"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "j18n-core",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-cli"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-codex"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "j18n-core",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-gemini-api"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "j18n-core",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-generator"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-io"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "j18n-core",
  "serde",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-translator"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "j18n-core",
@@ -696,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "j18n-validator"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "j18n-core",
  "j18n-io",
