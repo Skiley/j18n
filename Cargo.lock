@@ -591,6 +591,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "j18n-anthropic-api"
+version = "0.6.0"
+dependencies = [
+ "async-trait",
+ "j18n-core",
+ "j18n-translator",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "j18n-claude-code"
 version = "0.6.0"
 dependencies = [
@@ -607,12 +620,14 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
+ "j18n-anthropic-api",
  "j18n-claude-code",
  "j18n-codex",
  "j18n-core",
  "j18n-gemini-api",
  "j18n-generator",
  "j18n-io",
+ "j18n-openai-api",
  "j18n-translator",
  "j18n-validator",
  "regex",
@@ -682,6 +697,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "j18n-openai-api"
+version = "0.6.0"
+dependencies = [
+ "async-trait",
+ "j18n-core",
+ "j18n-translator",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

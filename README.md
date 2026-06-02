@@ -35,10 +35,10 @@ rules, file layout, and what gets re-translated when.
   Markdown/MDX documents (`"format": "markdown"`), the latter preserving all
   Markdown/MDX syntax and front-matter keys while only re-translating a
   document when its source changes. See **Formats**.
-- **Pluggable backends** — Claude Code (the local `claude` CLI), the Gemini
-  HTTP API, or Codex CLI (the local `codex` CLI). Each backend lets you pick
-  the model, and the CLI-based ones also let you pick a reasoning effort
-  level. Adding another is a small trait impl.
+- **Pluggable backends** — Claude Code (the local `claude` CLI), Codex CLI (the
+  local `codex` CLI), or a direct HTTP API: Gemini, Anthropic, OpenAI, or
+  OpenRouter. Each backend lets you pick the model, and the CLI-based ones also
+  let you pick a reasoning effort level. Adding another is a small trait impl.
 - **Free-form language names** — write `"Brazilian Portuguese"` or
   `"Simplified Chinese (Taiwan-style punctuation)"` and that's literally what
   the LLM sees. No hardcoded language list to limit you.
@@ -389,11 +389,14 @@ The `translator` field is a slash-separated string of the form
 `"<kind>[/<model>[/<effort>]]"`. Omitted segments fall back to per-backend
 defaults.
 
-| Kind          | Format                                | Default model           | Default effort | Notes |
-| ------------- | ------------------------------------- | ----------------------- | -------------- | ----- |
-| `claude-code` | `claude-code[/<model>[/<effort>]]`    | `opus`                  | `high`         | Effort is injected as a directive line in the prompt — the CLI itself doesn't have a native effort flag. |
-| `gemini-api`  | `gemini-api[/<model>]`                | `gemini-3.1-pro-preview`| (n/a)          | Model name without the `gemini-` prefix is auto-prefixed (so `3.1-pro` → `gemini-3.1-pro`). |
-| `codex`       | `codex[/<model>[/<effort>]]`          | `gpt-5.1`               | `high`         | Effort maps to `-c model_reasoning_effort=<effort>` and is also injected into the prompt. |
+| Kind            | Format                                | Default model           | Default effort | Notes |
+| --------------- | ------------------------------------- | ----------------------- | -------------- | ----- |
+| `claude-code`   | `claude-code[/<model>[/<effort>]]`    | `opus`                  | `high`         | Effort is injected as a directive line in the prompt — the CLI itself doesn't have a native effort flag. |
+| `gemini-api`    | `gemini-api[/<model>]`                | `gemini-3.1-pro-preview`| (n/a)          | Model name without the `gemini-` prefix is auto-prefixed (so `3.1-pro` → `gemini-3.1-pro`). |
+| `codex`         | `codex[/<model>[/<effort>]]`          | `gpt-5.1`               | `high`         | Effort maps to `-c model_reasoning_effort=<effort>` and is also injected into the prompt. |
+| `anthropic-api` | `anthropic-api[/<model>]`             | `claude-sonnet-4-5`     | (n/a)          | Direct Anthropic Messages API (not the `claude` CLI). Requires `ANTHROPIC_API_KEY`. |
+| `openai-api`    | `openai-api[/<model>]`                | `gpt-5.1`               | (n/a)          | Direct OpenAI Chat Completions API (not the `codex` CLI). Requires `OPENAI_API_KEY`. |
+| `openrouter-api`| `openrouter-api[/<model-slug>]`       | `openai/gpt-5.1`        | (n/a)          | OpenAI-compatible gateway to many models. Model slugs contain a `/` (e.g. `anthropic/claude-sonnet-4.5`). Requires `OPENROUTER_API_KEY`. |
 
 Examples:
 
@@ -406,6 +409,12 @@ Examples:
 "translator": "gemini-api/gemini-3.1-pro-preview"
 "translator": "codex/gpt-5.1"                // gpt-5.1, high effort
 "translator": "codex/gpt-5.1/low"            // gpt-5.1, low effort
+"translator": "anthropic-api"                // default claude-sonnet-4-5 via API
+"translator": "anthropic-api/claude-opus-4-5"
+"translator": "openai-api"                   // default gpt-5.1 via API
+"translator": "openai-api/gpt-4.1-mini"
+"translator": "openrouter-api"               // default openai/gpt-5.1 via OpenRouter
+"translator": "openrouter-api/anthropic/claude-sonnet-4.5"
 ```
 
 ### `claude-code`
@@ -427,6 +436,37 @@ GEMINI_API_KEY=... j18n sync my-project.json
 Spawns the local `codex` CLI in non-interactive mode
 (`codex exec --color never --model=<model> -c model_reasoning_effort=<effort> -`)
 and feeds the prompt over stdin. Make sure `codex` is on `PATH`.
+
+### `anthropic-api`
+
+Calls Anthropic's `/v1/messages` HTTP endpoint directly (no local CLI). Requires
+`ANTHROPIC_API_KEY` in the environment; fails fast at startup if missing.
+
+```sh
+ANTHROPIC_API_KEY=... j18n sync my-project.json
+```
+
+### `openai-api`
+
+Calls OpenAI's `/v1/chat/completions` HTTP endpoint directly (no local CLI).
+Requires `OPENAI_API_KEY`; fails fast at startup if missing. The request is kept
+minimal (no `temperature`/`max_tokens`) so both chat and reasoning models work.
+
+```sh
+OPENAI_API_KEY=... j18n sync my-project.json
+```
+
+### `openrouter-api`
+
+Calls [OpenRouter](https://openrouter.ai), an OpenAI-compatible gateway, at
+`https://openrouter.ai/api/v1/chat/completions`. Requires `OPENROUTER_API_KEY`;
+fails fast at startup if missing. Because OpenRouter model slugs contain a `/`,
+everything after `openrouter-api/` is taken verbatim as the model
+(e.g. `openrouter-api/anthropic/claude-sonnet-4.5`).
+
+```sh
+OPENROUTER_API_KEY=... j18n sync my-project.json
+```
 
 ## Patterns
 

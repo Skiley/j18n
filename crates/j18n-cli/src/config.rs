@@ -122,12 +122,18 @@ pub const CLAUDE_CODE_DEFAULT_EFFORT: &str = "high";
 pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.1-pro-preview";
 pub const CODEX_DEFAULT_MODEL: &str = "gpt-5.1";
 pub const CODEX_DEFAULT_EFFORT: &str = "high";
+pub const ANTHROPIC_API_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
+pub const OPENAI_API_DEFAULT_MODEL: &str = "gpt-5.1";
+pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-5.1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranslatorSelection {
 	ClaudeCode { model: String, effort: String },
 	GeminiApi { model: String },
 	Codex { model: String, effort: String },
+	AnthropicApi { model: String },
+	OpenAiApi { model: String },
+	OpenRouterApi { model: String },
 }
 
 impl TranslatorSelection {
@@ -182,8 +188,38 @@ impl TranslatorSelection {
 					"too many segments in translator \"{value}\"; expected at most \"codex/<model>/<effort>\""
 				)),
 			},
+			"anthropic-api" => match extra.len() {
+				0 => Ok(TranslatorSelection::AnthropicApi {
+					model: ANTHROPIC_API_DEFAULT_MODEL.into(),
+				}),
+				1 => Ok(TranslatorSelection::AnthropicApi { model: extra[0].into() }),
+				_ => Err(format!(
+					"too many segments in translator \"{value}\"; expected at most \"anthropic-api/<model>\""
+				)),
+			},
+			"openai-api" => match extra.len() {
+				0 => Ok(TranslatorSelection::OpenAiApi {
+					model: OPENAI_API_DEFAULT_MODEL.into(),
+				}),
+				1 => Ok(TranslatorSelection::OpenAiApi { model: extra[0].into() }),
+				_ => Err(format!(
+					"too many segments in translator \"{value}\"; expected at most \"openai-api/<model>\""
+				)),
+			},
+			// OpenRouter model slugs themselves contain '/' (e.g. "openai/gpt-5.1"),
+			// so everything after the kind is the model — no segment-count limit.
+			"openrouter-api" => {
+				if extra.is_empty() {
+					Ok(TranslatorSelection::OpenRouterApi {
+						model: OPENROUTER_DEFAULT_MODEL.into(),
+					})
+				} else {
+					Ok(TranslatorSelection::OpenRouterApi { model: extra.join("/") })
+				}
+			}
 			other => Err(format!(
-				"unknown translator kind \"{other}\"; expected one of \"claude-code\", \"gemini-api\", or \"codex\""
+				"unknown translator kind \"{other}\"; expected one of \"claude-code\", \"gemini-api\", \"codex\", \
+				\"anthropic-api\", \"openai-api\", or \"openrouter-api\""
 			)),
 		}
 	}
@@ -622,6 +658,45 @@ mod tests {
 			config.translator,
 			TranslatorSelection::Codex { ref model, ref effort }
 				if model == CODEX_DEFAULT_MODEL && effort == CODEX_DEFAULT_EFFORT
+		));
+	}
+
+	#[test]
+	fn parses_anthropic_api_translator_with_defaults_and_explicit_model() {
+		assert!(matches!(
+			TranslatorSelection::parse("anthropic-api"),
+			Ok(TranslatorSelection::AnthropicApi { ref model }) if model == ANTHROPIC_API_DEFAULT_MODEL
+		));
+		assert!(matches!(
+			TranslatorSelection::parse("anthropic-api/claude-opus-4-5"),
+			Ok(TranslatorSelection::AnthropicApi { ref model }) if model == "claude-opus-4-5"
+		));
+		assert!(TranslatorSelection::parse("anthropic-api/claude/extra").is_err());
+	}
+
+	#[test]
+	fn parses_openai_api_translator_with_defaults_and_explicit_model() {
+		assert!(matches!(
+			TranslatorSelection::parse("openai-api"),
+			Ok(TranslatorSelection::OpenAiApi { ref model }) if model == OPENAI_API_DEFAULT_MODEL
+		));
+		assert!(matches!(
+			TranslatorSelection::parse("openai-api/gpt-4.1-mini"),
+			Ok(TranslatorSelection::OpenAiApi { ref model }) if model == "gpt-4.1-mini"
+		));
+		assert!(TranslatorSelection::parse("openai-api/gpt-4.1/extra").is_err());
+	}
+
+	#[test]
+	fn parses_openrouter_translator_defaulting_and_preserving_slash_in_model_slug() {
+		assert!(matches!(
+			TranslatorSelection::parse("openrouter-api"),
+			Ok(TranslatorSelection::OpenRouterApi { ref model }) if model == OPENROUTER_DEFAULT_MODEL
+		));
+		// OpenRouter model slugs contain '/', and even three-segment slugs round-trip.
+		assert!(matches!(
+			TranslatorSelection::parse("openrouter-api/anthropic/claude-sonnet-4.5"),
+			Ok(TranslatorSelection::OpenRouterApi { ref model }) if model == "anthropic/claude-sonnet-4.5"
 		));
 	}
 

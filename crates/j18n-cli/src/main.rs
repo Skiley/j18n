@@ -6,11 +6,13 @@ use anyhow::{Context, Result};
 use args::{Cli, Command, CommandArgs, InitArgs, InstallGitHookArgs};
 use clap::Parser;
 use config::{I18nToolConfig, NamespacesConfig, TranslatorSelection};
+use j18n_anthropic_api::AnthropicApiI18nTranslator;
 use j18n_claude_code::ClaudeCodeBasedI18nTranslator;
 use j18n_codex::CodexCliBasedI18nTranslator;
 use j18n_core::{GenerationMode, I18nDefinition};
 use j18n_gemini_api::GeminiApiI18nTranslator;
 use j18n_generator::{I18nGenerator, J18nOptions};
+use j18n_openai_api::OpenAiApiI18nTranslator;
 use j18n_translator::I18nTranslator;
 use j18n_validator::TranslationValidator;
 use std::path::{Path, PathBuf};
@@ -237,6 +239,18 @@ async fn run(args: CommandArgs, mode: GenerationMode) -> Result<()> {
 				model.clone(),
 				effort.clone(),
 			)),
+			TranslatorSelection::AnthropicApi { model } => Box::new(AnthropicApiI18nTranslator::with_settings(
+				resolved.config.additional_prompts.clone(),
+				model.clone(),
+			)?),
+			TranslatorSelection::OpenAiApi { model } => Box::new(OpenAiApiI18nTranslator::openai(
+				resolved.config.additional_prompts.clone(),
+				model.clone(),
+			)?),
+			TranslatorSelection::OpenRouterApi { model } => Box::new(OpenAiApiI18nTranslator::openrouter(
+				resolved.config.additional_prompts.clone(),
+				model.clone(),
+			)?),
 		};
 
 		for resolved_run in &resolved.runs {

@@ -1,17 +1,13 @@
 use crate::model::{GeminiContent, GeminiPart, GenerateContentRequest, GenerateContentResponse, GenerationConfig};
 use async_trait::async_trait;
 use j18n_core::{ContentFormat, J18nError, J18nResult};
-use j18n_translator::I18nTranslator;
+use j18n_translator::{build_json_array_prompt, I18nTranslator, JSON_ARRAY_SYSTEM_INSTRUCTIONS};
 use reqwest::Client;
 use std::time::Duration;
 
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
 
 pub const DEFAULT_MODEL_NAME: &str = "gemini-3.1-pro-preview";
-const SYSTEM_INSTRUCTIONS: &str =
-	"Answer ONLY with a JSON array containing string elements, one for each translated value, \
-	in the same order as their inputs. Do NOT embed the JSON array in Markdown, do NOT write \
-	'```json' or equivalents; answer with a JSON array directly.";
 
 #[async_trait]
 pub trait GeminiTransport: Send + Sync {
@@ -137,7 +133,7 @@ impl<T: GeminiTransport> GeminiApiI18nTranslator<T> {
 			generation_config: Some(GenerationConfig { temperature: Some(1.0) }),
 			system_instruction: Some(GeminiContent {
 				parts: vec![GeminiPart {
-					text: SYSTEM_INSTRUCTIONS.to_string(),
+					text: JSON_ARRAY_SYSTEM_INSTRUCTIONS.to_string(),
 				}],
 				role: None,
 			}),
@@ -175,7 +171,7 @@ impl<T: GeminiTransport> I18nTranslator for GeminiApiI18nTranslator<T> {
 	) -> J18nResult<Vec<String>> {
 		let values_for_prompt_serialized = serde_json::to_string(&values)
 			.map_err(|e| J18nError::translator(format!("failed to serialize prompt array: {e}")))?;
-		let prompt = build_prompt(from_language, to_language, &self.additional_prompts, format);
+		let prompt = build_json_array_prompt(from_language, to_language, &self.additional_prompts, format);
 		let response_text = self.complete_chat(vec![prompt, values_for_prompt_serialized]).await?;
 		let parsed: Vec<String> = serde_json::from_str(response_text.trim()).map_err(|e| {
 			J18nError::translator(format!(
@@ -184,60 +180,6 @@ impl<T: GeminiTransport> I18nTranslator for GeminiApiI18nTranslator<T> {
 		})?;
 
 		Ok(parsed)
-	}
-}
-
-fn build_prompt(
-	from_language: &str,
-	to_language: &str,
-	additional_prompts: &[String],
-	format: ContentFormat,
-) -> String {
-	let mut lines: Vec<String> = instruction_lines(from_language, to_language, format);
-
-	lines.push("DO NOT remove, skip or modify placeholders, like [1], [2], [3], etc.".to_string());
-
-	for prompt in additional_prompts {
-		lines.push(prompt.clone());
-	}
-
-	lines.push("Once again, DO NOT remove placeholders like '[1]', '[2]', '[3]', '[4]', etc.".to_string());
-	lines.extend(answer_lines(format));
-
-	lines.join("\n")
-}
-
-fn instruction_lines(from_language: &str, to_language: &str, format: ContentFormat) -> Vec<String> {
-	match format {
-		ContentFormat::Json => vec![
-			format!("Translate the values in the following JSON array, from {from_language} to {to_language}."),
-			"DO NOT remove or modify HTML tags.".to_string(),
-		],
-		ContentFormat::Markdown => vec![
-			format!("Translate the Markdown/MDX document(s) in the following JSON array, from {from_language} to {to_language}."),
-			"Preserve ALL Markdown and MDX syntax exactly: headings, lists, tables, blockquotes, emphasis, and horizontal rules.".to_string(),
-			"DO NOT translate or alter fenced or inline code, code block contents, URLs, link targets, image paths, HTML/JSX tags and attributes, JSX/React component names, or import/export statements.".to_string(),
-			"For YAML front matter, translate only human-readable string values (e.g. title, description); never translate front matter keys.".to_string(),
-			"Translate only human-readable prose: headings, paragraphs, list items, table cells, link text, and image alt text.".to_string(),
-			"DO NOT add, remove, or reflow whitespace, blank lines, or indentation beyond what translating the prose itself requires.".to_string(),
-		],
-	}
-}
-
-fn answer_lines(format: ContentFormat) -> Vec<String> {
-	match format {
-		ContentFormat::Json => vec![
-			"Answer ONLY with a JSON array containing string elements, one for each translated value, in the same order as their inputs.".to_string(),
-			"Do NOT embed the JSON array in Markdown, do NOT write '```json' or equivalents.".to_string(),
-			"Answer with a JSON array directly.".to_string(),
-			"The JSON array is:".to_string(),
-		],
-		ContentFormat::Markdown => vec![
-			"Answer ONLY with a JSON array of strings, one fully translated document per element, in the same order as their inputs.".to_string(),
-			"Each element must be the entire translated document encoded as a single JSON string (newlines escaped as \\n).".to_string(),
-			"Do NOT wrap the array or any element in a Markdown code fence; do NOT write '```json', '```', or any commentary.".to_string(),
-			"The JSON array of documents is:".to_string(),
-		],
 	}
 }
 

@@ -2,12 +2,14 @@
 resolver = "2"
 members = [
 	"crates/j18n-cli",
+	"crates/j18n-anthropic-api",
 	"crates/j18n-claude-code",
 	"crates/j18n-codex",
 	"crates/j18n-core",
 	"crates/j18n-gemini-api",
 	"crates/j18n-generator",
 	"crates/j18n-io",
+	"crates/j18n-openai-api",
 	"crates/j18n-translator",
 	"crates/j18n-validator",
 ]
@@ -36,12 +38,14 @@ tokio = { version = "1.40", features = ["fs", "io-util", "macros", "process", "r
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+j18n-anthropic-api = { path = "crates/j18n-anthropic-api" }
 j18n-claude-code = { path = "crates/j18n-claude-code" }
 j18n-codex = { path = "crates/j18n-codex" }
 j18n-core = { path = "crates/j18n-core" }
 j18n-gemini-api = { path = "crates/j18n-gemini-api" }
 j18n-generator = { path = "crates/j18n-generator" }
 j18n-io = { path = "crates/j18n-io" }
+j18n-openai-api = { path = "crates/j18n-openai-api" }
 j18n-translator = { path = "crates/j18n-translator" }
 j18n-validator = { path = "crates/j18n-validator" }
 

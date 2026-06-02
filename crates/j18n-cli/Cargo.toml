@@ -13,12 +13,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+j18n-anthropic-api.workspace = true
 j18n-claude-code.workspace = true
 j18n-codex.workspace = true
 j18n-core.workspace = true
 j18n-gemini-api.workspace = true
 j18n-generator.workspace = true
 j18n-io.workspace = true
+j18n-openai-api.workspace = true
 j18n-translator.workspace = true
 j18n-validator.workspace = true
 regex.workspace = true
