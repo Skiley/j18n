@@ -11,15 +11,28 @@ on:
 
 jobs:
   release:
-    uses: Skiley/rust-binary-publish/.github/workflows/release.yml@v1.0.0
+    uses: Skiley/rust-binary-publish/.github/workflows/release.yml@v2.0.0
     permissions:
       contents: write
       id-token: write
     with:
-      bin: j18n
-      crate: j18n-cli
-      npm-description: "j18n CLI — LLM-powered syncing of translated locale files"
-      npm-package: "@j18n/cli"
       tag: ${{ inputs.tag || github.ref_name }}
+      input: |
+        {
+          "type": "rust-binaries",
+          "binary-name": "j18n",
+          "crate": "j18n-cli"
+        }
+      outputs: |
+        [
+          {
+            "type": "github-release"
+          },
+          {
+            "type": "npm-package",
+            "package-name": "@j18n/cli",
+            "package-description": "j18n CLI — LLM-powered syncing of translated locale files"
+          }
+        ]
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
